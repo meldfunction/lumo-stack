@@ -41,19 +41,33 @@ The coding assistant runs in a container that:
 
 `lumo doctor` re-tests all of this by actually trying the writes and connections.
 
+## Prerequisites
+
+**Account**
+
+- A **Proton Unlimited** account. It includes Lumo; the
+  [Lumo Plus](https://proton.me/support/proton-add-ons) add-on raises usage
+  limits, which helps with heavier coding sessions.
+- New to Lumo? Read more: [Lumo](https://lumo.proton.me) ·
+  [What's new in Lumo 2.0](https://proton.me/blog/lumo-2) ·
+  [Proton plans](https://proton.me/support/upgrading-to-new-proton-plan)
+
+**Software (macOS)**
+
+- [OrbStack](https://orbstack.dev) (recommended) or Docker Desktop
+- Node.js 20+, Python 3.10+ and git: `brew install git node python`
+- Chrome, Brave or Edge, for the Proton sign-in
+- Optional: [Claude Code](https://claude.com/claude-code), for `claude-lumo`
+
 ## Install
 
-You need: macOS, [OrbStack](https://orbstack.dev) (or Docker Desktop),
-Node.js 20+, Python 3.10+, git, and Chrome, Brave or Edge for the Proton sign-in.
-A Proton account; Proton Unlimited includes free-tier Lumo, and Lumo Plus raises the limits.
-
-**With dialogs:** download this folder, then double-click **Install Lumo.command**
-(first time: right-click → Open).
+**With dialogs:** [download the zip](https://github.com/meldfunction/lumo-stack/archive/refs/heads/main.zip),
+unzip it, then double-click **Install Lumo.command** (first time: right-click → Open).
 
 **In the terminal:**
 
 ```sh
-git clone <this repo> ~/lumo-stack && cd ~/lumo-stack
+git clone https://github.com/meldfunction/lumo-stack.git ~/lumo-stack && cd ~/lumo-stack
 ./install                  # options: --workspace DIR  --with-claude  --dry-run
 ```
 

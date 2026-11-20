@@ -107,6 +107,11 @@
   .copy:hover { color: var(--term-ink); }
   .req { display: flex; flex-wrap: wrap; gap: 8px; }
   .req span { font-size: 13px; padding: 6px 10px; border-radius: 6px; background: var(--surface); border: 1px solid var(--line); }
+  .prereq { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 18px; }
+  .prereq > div { padding: 16px; border-radius: 10px; background: var(--accent-soft); border: 1px solid var(--line); min-width: 0; }
+  .prereq p { font-size: 15px; color: var(--muted); }
+  .prereq .links { color: var(--ink); }
+  @media (max-width: 820px) { .prereq { grid-template-columns: 1fr; } }
   .soonbox { background: var(--surface); border: 1px dashed var(--line); border-radius: 12px; padding: 20px; }
   .soonbox ul { margin: 10px 0 0; padding-left: 20px; color: var(--muted); }
 
@@ -285,7 +290,16 @@
     <div class="wrap">
       <div class="eyebrow">Install</div>
       <h2>Install Lumo Stack</h2>
-      <p>You'll need a Proton account. Proton Unlimited includes free-tier Lumo; the Lumo Plus add-on raises usage limits.</p>
+      <div class="prereq">
+        <div>
+          <h3>Requires a Proton Unlimited account</h3>
+          <p>Proton Unlimited includes Lumo. The <a href="https://proton.me/support/proton-add-ons" target="_blank" rel="noopener">Lumo Plus add-on</a> raises usage limits, which helps with heavier coding sessions.</p>
+        </div>
+        <div>
+          <h3>New to Lumo?</h3>
+          <p class="links"><a href="https://lumo.proton.me" target="_blank" rel="noopener">Try Lumo</a> · <a href="https://proton.me/blog/lumo-2" target="_blank" rel="noopener">What's new in Lumo 2.0</a> · <a href="https://proton.me/support/upgrading-to-new-proton-plan" target="_blank" rel="noopener">Proton plans</a></p>
+        </div>
+      </div>
       <div class="tabs" role="tablist" aria-label="Platform">
         <button class="tab" role="tab" id="t-mac" aria-selected="true" aria-controls="p-mac">macOS</button>
         <button class="tab" role="tab" id="t-win" aria-selected="false" aria-controls="p-soon">Windows<span class="s">v0.2</span></button>
@@ -296,7 +310,7 @@
         <div>
           <h3>Before you start</h3>
           <div class="req">
-            <span>macOS</span><span>OrbStack or Docker Desktop</span><span>Node.js 20+</span><span>Python 3.10+</span><span>git</span><span>Chrome, Brave or Edge</span>
+            <span>Proton Unlimited</span><span>macOS</span><span>OrbStack or Docker Desktop</span><span>Node.js 20+</span><span>Python 3.10+</span><span>git</span><span>Chrome, Brave or Edge</span><span>Optional: Claude Code</span>
           </div>
           <div class="code"><pre>brew install git node python
 brew install --cask orbstack</pre><button class="copy" type="button">Copy</button></div>
@@ -305,7 +319,7 @@ brew install --cask orbstack</pre><button class="copy" type="button">Copy</butto
           <div>
             <h3>With dialogs</h3>
             <ol class="steps">
-              <li>Download the Lumo Stack folder.</li>
+              <li><a href="https://github.com/meldfunction/lumo-stack/archive/refs/heads/main.zip" target="_blank" rel="noopener">Download Lumo Stack (.zip)</a> and unzip it.</li>
               <li>Double-click <strong>Install Lumo.command</strong>. The first time, right-click it and choose Open.</li>
               <li>Pick where Lumo keeps its files, or use the suggested <code>~/lumo</code>.</li>
               <li>When asked, sign in to Proton in the browser window that opens. It closes by itself.</li>
@@ -315,9 +329,9 @@ brew install --cask orbstack</pre><button class="copy" type="button">Copy</butto
           <div>
             <h3>In the terminal</h3>
             <ol class="steps">
-              <li>Get the code into <code>~/lumo-stack</code> and run the installer:
-                <div class="code"><pre>cd ~/lumo-stack
-./install</pre><button class="copy" type="button">Copy</button></div></li>
+              <li>Clone the repository and run the installer:
+                <div class="code"><pre>git clone https://github.com/meldfunction/lumo-stack.git ~/lumo-stack
+cd ~/lumo-stack && ./install</pre><button class="copy" type="button">Copy</button></div></li>
               <li>Preview first without changing anything:
                 <div class="code"><pre>./install --dry-run</pre><button class="copy" type="button">Copy</button></div></li>
               <li>Options: <code>--workspace DIR</code>, <code>--with-claude</code>, <code>--no-login</code>.</li>
@@ -357,7 +371,7 @@ brew install --cask orbstack</pre><button class="copy" type="button">Copy</butto
 </main>
 
 <footer>
-  <div class="wrap">Lumo Stack v0.1.0. Built on <a href="https://github.com/ZeroTricks/lumo-tamer" target="_blank" rel="noopener">lumo-tamer</a>, LiteLLM, OpenCode and Open WebUI. Not affiliated with Proton AG.</div>
+  <div class="wrap">Lumo Stack v0.1.0 · <a href="https://github.com/meldfunction/lumo-stack" target="_blank" rel="noopener">Source on GitHub</a>. Built on <a href="https://github.com/ZeroTricks/lumo-tamer" target="_blank" rel="noopener">lumo-tamer</a>, LiteLLM, OpenCode and Open WebUI. Not affiliated with Proton AG.</div>
 </footer>
 
 <script>
