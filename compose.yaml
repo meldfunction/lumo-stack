@@ -27,6 +27,13 @@ x-jail: &jail
   user: node
   environment:
     LITELLM_KEY: ${LITELLM_MASTER_KEY:?run the installer first}
+    # The jail has no internet: switch off everything that would only time out
+    # (model catalogue, plugin/LSP downloads, update checks, external skills).
+    OPENCODE_DISABLE_MODELS_FETCH: "1"
+    OPENCODE_DISABLE_DEFAULT_PLUGINS: "1"
+    OPENCODE_DISABLE_LSP_DOWNLOAD: "1"
+    OPENCODE_DISABLE_AUTOUPDATE: "1"
+    OPENCODE_DISABLE_EXTERNAL_SKILLS: "1"
   volumes:
     - opencode-home:/home/node
     - ./config/opencode.json:/home/node/.config/opencode/opencode.json:ro
