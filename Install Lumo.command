@@ -16,35 +16,37 @@ fail() {
 }
 
 # 1. Consent
-ans=$(dialog "This installs Lumo Stack: Proton Lumo as a chat app, a locked-down coding assistant and a dashboard, all on this Mac.
+ans=$(dialog "Lumo Stack: Proton's private AI in your terminal, a jailed coding agent and your browser. All on this Mac. Your prompts are nobody's training data.
 
-It uses lumo-tamer, an UNOFFICIAL community bridge not affiliated with Proton. Proton could block it, and it could put your Proton account at risk.
+The fine print: it uses lumo-tamer, an UNOFFICIAL community bridge not affiliated with Proton. Proton could block it, and it could put your Proton account at risk.
 
-You need: OrbStack or Docker Desktop, Node.js 20+, Python 3.10+, git, and Chrome, Brave or Edge." "Cancel" "Install")
-[[ $ans == Install ]] || exit 0
+You'll need: a Proton account, OrbStack or Docker Desktop, Node.js 20+, Python 3.10+, git, and Chrome, Brave or Edge." "Not today" "Let's go")
+[[ $ans == "Let's go" ]] || exit 0
 
 # 2. Workspace
 args=(--yes --no-login)
-ans=$(dialog "Where should Lumo keep its files? It can only see this folder (code, inbox and out)." "Choose a folder…" "Use ~/lumo")
+ans=$(dialog "Where should Lumo live? The coding agent can only see this one folder (code, inbox and out). Nothing else on your Mac." "Choose a folder…" "Use ~/lumo")
 if [[ $ans == "Choose a folder…" ]]; then
   dir=$(osascript -e 'POSIX path of (choose folder with prompt "Choose or create a folder for Lumo")' 2>/dev/null) || exit 0
   args+=(--workspace "${dir%/}")
 fi
 
-# 3. Optional Claude Code launcher
+# 3. Optional: Claude Code on Lumo
 if command -v claude >/dev/null; then
-  [[ $(dialog "Claude Code is installed. Also add 'claude-lumo' (Claude Code running on Lumo, no Anthropic account)?" "No" "Add it") == "Add it" ]] \
-    && args+=(--with-claude)
+  q="Claude Code is already here. Add claude-lumo too? Same Claude Code, but Lumo is the brain: prompts go to Lumo through this Mac, never to Anthropic. Plain 'claude' keeps working as before."
+else
+  q="Want Claude Code too? We'll install it (one download from Anthropic) and add claude-lumo: Claude Code with Lumo as the brain. No Anthropic account needed, and your prompts never go to Anthropic."
 fi
+[[ $(dialog "$q" "Skip" "Yes, add it") == "Yes, add it" ]] && args+=(--with-claude)
 
 # 4. Install
-print "Installing Lumo Stack. This can take 10–20 minutes the first time (large downloads).\n"
+print "Installing Lumo Stack. First time takes 10–20 minutes (a few GB of downloads). Coffee?\n"
 ./install $args 2>&1 | tee $LOG
 (( ${pipestatus[1]} == 0 )) || fail "$(grep 'install:' $LOG | tail -1 | sed 's/\x1b\[[0-9;]*m//g')"
 
 # 5. Sign in, then open the dashboard
-if [[ $(dialog "Installed. Next, sign in to Proton: a browser window will open on Lumo. Sign in there; it closes by itself when done." "Later" "Sign in") == "Sign in" ]]; then
+if [[ $(dialog "Installed. Last step: sign in to Proton. A browser window opens on Lumo; sign in and it closes itself." "Later" "Sign in") == "Sign in" ]]; then
   ./lumo-login || osascript -e 'display alert "Sign-in didn'"'"'t finish" message "You can sign in any time from Lumo Home."' >/dev/null
 fi
 ./lumo home >/dev/null
-print "\nDone. Lumo Home is open in your browser. You can close this window."
+print "\nYou're in. Lumo Home is open in your browser. You can close this window."

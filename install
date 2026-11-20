@@ -74,7 +74,6 @@ for b in "Google Chrome" "Brave Browser" "Microsoft Edge" "Chromium"; do
   [[ -x "/Applications/$b.app/Contents/MacOS/$b" ]] && { browser=$b; break; }
 done
 [[ -n $browser ]] || die "A Chromium browser is needed for the Proton sign-in (Chrome, Brave, Edge)"
-[[ -n $with_claude ]] && ! command -v claude >/dev/null && die "--with-claude needs Claude Code installed first"
 # Ports must be free, unless this is a re-install (our own services own them).
 ours=$(launchctl list 2>/dev/null | awk '{print $3}' | grep -c "^$LUMO_LABEL\\." || true)
 if (( ours == 0 )); then
@@ -87,19 +86,48 @@ fi
 note "${grn}ok${rst}: macOS, git, Node $(node -v), $(python3 -V), Docker, $browser"
 
 # --- 2. Consent --------------------------------------------------------------
-step "Before you continue"
+step "The fine print (read it, it's short)"
 cat <<'EOF'
-    This installs an UNOFFICIAL bridge to Proton Lumo (lumo-tamer, a community
-    project not affiliated with Proton). It talks to Lumo the way Proton's web
-    app does. Proton could block it, and it could put your Proton account at
-    risk. Your Proton login is stored encrypted on this Mac; the encryption key
-    goes in your macOS Keychain.
+    Lumo has no public API yet, so this uses lumo-tamer: an UNOFFICIAL community
+    bridge that talks to Lumo the way Proton's own web app does. It's not
+    affiliated with Proton. Proton could block it, and it could put your Proton
+    account at risk. Rebellious, yes. Reckless, no.
 
-    Proton Unlimited includes free-tier Lumo; Lumo Plus raises usage limits.
-    Everything runs on this Mac and listens on 127.0.0.1 only.
+    Your Proton login is stored encrypted on this Mac (key in your Keychain).
+    Everything listens on 127.0.0.1 only: nothing is open to your network.
+    Any Proton account works; Lumo Plus is worth it if you code a lot.
 EOF
 if [[ -z $yes && -z $dry ]]; then
   read "ans?    Type 'yes' to continue: "; [[ $ans == yes ]] || die "cancelled"
+fi
+
+# --- 2b. Claude Code (optional add-on) ----------------------------------------
+if [[ -n $with_claude ]]; then
+  step "Claude Code, minus Anthropic"
+  cat <<'EOF'
+    claude-lumo runs Claude Code with Lumo as the model. Your prompts go to
+    LiteLLM on 127.0.0.1, then to Lumo; never to Anthropic. The launcher:
+      - points Claude Code at your local LiteLLM (ANTHROPIC_BASE_URL)
+      - signs in with your LiteLLM key, not an Anthropic key or login
+      - maps every model slot (Opus, Sonnet, Haiku, subagents) to Lumo
+      - turns off telemetry, error reports, auto-updates and MCP servers
+      - refuses to start if LiteLLM routes anywhere but Lumo
+    Plain `claude` stays your normal Claude Code. Only claude-lumo is Lumo-only.
+EOF
+  if ! command -v claude >/dev/null; then
+    note "Claude Code isn't installed. The official installer downloads it from Anthropic"
+    note "once (curl -fsSL https://claude.ai/install.sh | bash). No account is needed for claude-lumo."
+    if [[ -z $yes && -z $dry ]]; then
+      read "ans?    Install Claude Code now? [y/N] "; [[ $ans == [yY]* ]] || { with_claude=""; note "skipped: re-run with --with-claude later"; }
+    fi
+    if [[ -n $with_claude ]]; then
+      run sh -c 'curl -fsSL https://claude.ai/install.sh | bash' || die "Claude Code install failed"
+      [[ -n $dry ]] || command -v claude >/dev/null || export PATH="$HOME/.local/bin:$PATH"
+      [[ -n $dry ]] || command -v claude >/dev/null || die "Claude Code installed but not on PATH; open a new terminal and re-run"
+    fi
+  else
+    note "Claude Code found: $(claude --version 2>/dev/null | head -1)"
+  fi
 fi
 
 # --- 3. Workspace ------------------------------------------------------------
@@ -201,10 +229,12 @@ if [[ -z $no_login ]] && ! (cd $TAMER_DIR && node dist/src/tamer.js auth status 
 fi
 step "Checking everything"
 $LUMO_STACK/lumo-doctor || true
-step "Installed"
+step "You're in."
 cat <<EOF
-    lumo home      dashboard: status, sign-in, files, chat, code
-    lumo           coding assistant in the terminal (jailed to $LUMO_HOME)
-    lumo web       chat in the browser
+    lumo home      the dashboard: status, sign-in, files, chat, code
+    lumo           the jailed coding agent (it only sees $LUMO_HOME)
+    lumo web       chat in your browser
     lumo help      everything else
 EOF
+[[ -n $with_claude ]] && print "    claude-lumo    Claude Code with Lumo as the brain, no Anthropic in the loop"
+print "\n    Your prompts are nobody's training data. Have fun."
