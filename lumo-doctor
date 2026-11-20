@@ -1,0 +1,65 @@
+#!/bin/zsh
+# Health and security check for the Lumo stack. Read-only: changes nothing
+# except a probe file it creates and deletes in the workspace's out/ folder.
+source ${0:A:h}/lib.zsh
+STACK=$LUMO_STACK
+IMAGE=lumo-opencode:$OPENCODE_VERSION
+pass=0 fail=0 warn=0
+ok()   { print "  ✓ $1"; (( pass++ )); }
+bad()  { print "  ✗ $1${2:+  →  $2}"; (( fail++ )); }
+meh()  { print "  ! $1${2:+  →  $2}"; (( warn++ )); }
+chk()  { if eval "$2" >/dev/null 2>&1; then ok "$1"; else bad "$1" "$3"; fi; }
+
+print "Services"
+chk "lumo-tamer answering on 127.0.0.1:$TAMER_PORT" "curl -s -m 3 -o /dev/null http://127.0.0.1:$TAMER_PORT/health" "lumo status; $LOG_DIR/lumo-tamer.log"
+chk "LiteLLM answering on 127.0.0.1:$LITELLM_PORT" "curl -s -m 3 -o /dev/null http://127.0.0.1:$LITELLM_PORT/health/liveliness" "$LOG_DIR/litellm.log"
+chk "Lumo Home on 127.0.0.1:$HOME_PORT" "curl -s -m 3 -o /dev/null http://127.0.0.1:$HOME_PORT/" "launchctl kickstart gui/$(id -u)/$(agent lumo-home)"
+for a in lumo-tamer litellm lumo-home lumo-watch; do
+  chk "LaunchAgent $(agent $a) loaded" "launchctl list $(agent $a)" "launchctl load ~/Library/LaunchAgents/$(agent $a).plist"
+done
+chk "Docker running" "docker info" "open OrbStack or Docker Desktop"
+chk "Open WebUI container exists" "docker container inspect lumo-webui" "$STACK/webui-create"
+chk "OpenCode image $IMAGE present" "docker image inspect $IMAGE" "lumo update opencode"
+
+print "\nProton login"
+out=$(cd $TAMER_DIR && node dist/src/tamer.js auth status 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
+if print -r -- "$out" | grep -q "configured and valid"; then
+  ok "signed in ($(print -r -- "$out" | sed -n 's/.*expiresIn: *//p' | head -1) left, auto-renews)"
+else bad "not signed in" "lumo login"; fi
+r=$(curl -s -m 90 http://127.0.0.1:$TAMER_PORT/v1/chat/completions -H "Authorization: Bearer $(tamer_key)" -H "Content-Type: application/json" \
+  -d '{"model":"lumo","messages":[{"role":"user","content":"Reply with exactly: ok"}]}' | python3 -c "import json,sys; print(json.load(sys.stdin)['choices'][0]['message']['content'])" 2>/dev/null)
+[[ -n $r ]] && ok "Lumo answers a test message" || bad "Lumo didn't answer a test message" "network to Proton? lumo login?"
+
+print "\nRouting (Lumo only)"
+cfg=$(grep -vE '^\s*#' $LITELLM_CFG)
+[[ $(print -r -- "$cfg" | grep -E '^\s*api_base:' | sed 's/^ *//' | sort -u) == "api_base: http://127.0.0.1:$TAMER_PORT/v1" ]] \
+  && ok "LiteLLM routes only to lumo-tamer" || bad "LiteLLM routes somewhere else" "$LITELLM_CFG"
+print -r -- "$cfg" | grep -qiE 'anthropic|claude' && bad "LiteLLM config mentions anthropic/claude" || ok "no Anthropic routes in LiteLLM"
+grep -q '"baseURL": "http://lumo-relay:4000/v1"' $STACK/opencode.json && ok "OpenCode routes only to the relay" || bad "OpenCode baseURL changed" "$STACK/opencode.json"
+grep -q "listen(this.serverConfig.port, '127.0.0.1'" $TAMER_DIR/src/api/server.ts && ok "lumo-tamer bound to localhost" || bad "lumo-tamer not bound to localhost" "re-apply patches/lumo-tamer-localhost.patch"
+docker port lumo-webui 2>/dev/null | grep -qv '127.0.0.1' && bad "Open WebUI published beyond localhost" || ok "Open WebUI published on localhost only"
+
+print "\nCoding jail"
+[[ $(docker network inspect -f '{{.Internal}}' lumo-jail 2>/dev/null) == true ]] && ok "lumo-jail network is internal (no internet route)" || bad "lumo-jail network missing or not internal"
+[[ $(docker inspect -f '{{.State.Running}}' lumo-relay 2>/dev/null) == true ]] && ok "lumo-relay running" || bad "lumo-relay not running" "docker start lumo-relay"
+probe=$(docker run --rm --network lumo-jail --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges \
+  -v $STACK/opencode.json:/home/node/.config/opencode/opencode.json:ro -v $LUMO_HOME/code:/lumo/code -v $LUMO_HOME/inbox:/lumo/inbox:ro -v $LUMO_HOME/out:/lumo/out \
+  --entrypoint sh $IMAGE -c '
+  w(){ sh -c "echo x > $1" 2>/dev/null && { echo "W $1"; rm -f "$1"; } || echo "B $1"; }
+  w /etc/lumo-probe; w /usr/bin/lumo-probe; w /lumo-probe; w /lumo/inbox/lumo-probe; w /home/node/.config/opencode/opencode.json; w /lumo/out/.lumo-probe
+  [ -e /Users ] && echo "W /Users-visible" || echo "B /Users-visible"
+  [ "$(id -u)" = 0 ] && echo "W root" || echo "B root"
+  node -e "fetch(\"https://example.com\",{signal:AbortSignal.timeout(5000)}).then(()=>console.log(\"W internet\")).catch(()=>console.log(\"B internet\"))"
+  node -e "fetch(\"http://lumo-relay:4000/health/liveliness\",{signal:AbortSignal.timeout(5000)}).then(()=>console.log(\"W relay\")).catch(()=>console.log(\"B relay\"))"' 2>&1)
+for p in /etc/lumo-probe /usr/bin/lumo-probe /lumo-probe /lumo/inbox/lumo-probe /home/node/.config/opencode/opencode.json /Users-visible root internet; do
+  print -r -- "$probe" | grep -q "^B $p$" && ok "blocked: $p" || bad "NOT blocked: $p"
+done
+print -r -- "$probe" | grep -q "^W /lumo/out/.lumo-probe$" && ok "writable: /lumo/out (as intended)" || bad "can't write /lumo/out"
+print -r -- "$probe" | grep -q "^W relay$" && ok "reaches Lumo via relay" || bad "can't reach the relay"
+
+print "\nLogs (last hour)"
+errs=$(find $LOG_DIR \( -name 'lumo*.log' -o -name 'litellm.log' \) -newermt '-1 hour' 2>/dev/null | xargs grep -hiE 'ABORT|ERROR|Traceback' 2>/dev/null | grep -v 'fetch failed' | tail -3)
+[[ -z $errs ]] && ok "no errors logged in the last hour" || meh "recent errors" "$(print -r -- "$errs" | head -1 | cut -c1-120)"
+
+print "\n$pass passed, $fail failed, $warn warnings"
+(( fail == 0 ))

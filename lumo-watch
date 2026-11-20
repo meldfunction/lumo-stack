@@ -1,0 +1,32 @@
+#!/bin/zsh
+# Hourly check (LaunchAgent <prefix>.lumo-watch): macOS notification when the
+# Proton login is invalid or about to expire, or lumo-tamer is down.
+# Notifies once per problem, and once when it's fixed. Logged to lumo-watch.log.
+
+source ${0:A:h}/lib.zsh
+LOG=$LOG_DIR/lumo-watch.log
+LAST=$LUMO_STACK/.watch-state
+log() { print -r -- "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
+notify() { osascript -e "display notification \"$2\" with title \"Lumo\" subtitle \"$1\" sound name \"Funk\"" 2>/dev/null; log "notify: $1 - $2"; }
+
+if ! curl -s -m 3 -o /dev/null http://127.0.0.1:$TAMER_PORT/health; then
+  state="down"
+else
+  out=$(cd $TAMER_DIR && node dist/src/tamer.js auth status 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
+  hours=$(print -r -- "$out" | sed -n 's/.*expiresIn: *\([0-9.]*\) hours.*/\1/p' | head -1)
+  if ! print -r -- "$out" | grep -q "configured and valid"; then state="invalid"
+  elif [[ -n $hours ]] && (( hours < 2 )); then state="expiring"
+  else state="ok"; fi
+fi
+
+prev=$(cat $LAST 2>/dev/null)
+log "check: $state${hours:+ (${hours}h left)}"
+[[ $state == $prev ]] && exit 0
+print -r -- $state > $LAST
+case $state in
+  down)     notify "lumo-tamer is down" "Open Lumo Home (lumo home) or run: lumo status" ;;
+  invalid)  notify "Sign-in needed" "Your Proton login stopped working. Run: lumo login" ;;
+  expiring) notify "Login expiring" "Less than 2 hours left and it hasn't renewed. Run: lumo login" ;;
+  ok)       [[ -n $prev ]] && notify "All good" "Lumo is signed in and running again." ;;
+esac
+exit 0

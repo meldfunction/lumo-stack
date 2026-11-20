@@ -1,0 +1,210 @@
+#!/bin/zsh
+# Lumo Stack installer for macOS.
+#   ./install                      interactive install
+#   ./install --workspace DIR      workspace folder (default ~/lumo)
+#   ./install --with-claude        also add the Claude Code launcher (claude-lumo)
+#   ./install --no-login           skip the Proton sign-in at the end
+#   ./install --yes                don't ask for confirmation
+#   ./install --dry-run            show what would happen, change nothing
+# Safe to re-run: existing keys, configs and logins are kept.
+emulate -L zsh; setopt err_return pipe_fail
+HERE=${0:A:h}
+workspace="" with_claude="" no_login="" yes="" dry=""
+while (( $# )); do
+  case $1 in
+    --workspace) workspace=${2:A}; shift 2 ;;
+    --with-claude) with_claude=1; shift ;;
+    --no-login) no_login=1; shift ;;
+    --yes) yes=1; shift ;;
+    --dry-run) dry=1; shift ;;
+    -h|--help) sed -n '2,9p' $0 | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) print -u2 "install: unknown option $1"; exit 1 ;;
+  esac
+done
+
+bold=$'\e[1m' dim=$'\e[2m' red=$'\e[31m' grn=$'\e[32m' rst=$'\e[0m'
+step() { print "\n${bold}==> $*${rst}"; }
+note() { print "    $*"; }
+die()  { print -u2 "${red}install: $*${rst}"; exit 1; }
+run()  { if [[ -n $dry ]]; then print "    ${dim}[dry-run] $*${rst}"; else "$@"; fi; }
+render() {  # render <template> <dest>: fill {{VARS}} from the environment
+  local out=$(python3 - "$1" <<'PY'
+import os, re, sys
+print(re.sub(r"\{\{([A-Z_]+)\}\}", lambda m: os.environ[m.group(1)], open(sys.argv[1]).read()), end="")
+PY
+)
+  if [[ -n $dry ]]; then print "    ${dim}[dry-run] write $2${rst}"; else print -r -- "$out" > $2; fi
+}
+key() { openssl rand -hex 24; }
+
+# --- 0. Where things go ------------------------------------------------------
+if [[ -n $workspace && ! -e $HERE/lumo.env ]]; then
+  if [[ -n $dry ]]; then print "    [dry-run] write $HERE/lumo.env (LUMO_HOME=$workspace)"
+  else print -r -- "LUMO_HOME=$workspace" > $HERE/lumo.env; fi
+  LUMO_HOME=$workspace
+fi
+LUMO_STACK=$HERE
+source $HERE/lib.zsh
+
+print "${bold}Lumo Stack installer${rst}${dry:+  (dry run)}"
+note "Workspace:   $LUMO_HOME   (code/ inbox/ out/)"
+note "Stack:       $LUMO_STACK"
+note "lumo-tamer:  $TAMER_DIR"
+note "LiteLLM:     $LITELLM_DIR"
+note "Commands:    $BIN_DIR/lumo"
+note "Services:    LaunchAgents $LUMO_LABEL.*  ·  logs in $LOG_DIR"
+
+# --- 1. Prerequisites --------------------------------------------------------
+step "Checking prerequisites"
+[[ $(uname) == Darwin ]] || die "macOS only for now."
+missing=()
+for c in git curl openssl node npm python3; do command -v $c >/dev/null || missing+=($c); done
+(( ${#missing} )) && die "missing: ${missing[*]}  (Homebrew: brew install git node python)"
+node_major=${$(node -v)#v}; node_major=${node_major%%.*}
+(( node_major >= 20 )) || die "Node.js 20+ needed (found $(node -v))"
+python3 -c 'import sys; sys.exit(sys.version_info < (3,10))' || die "Python 3.10+ needed"
+command -v docker >/dev/null || die "Docker needed: install OrbStack (recommended) or Docker Desktop"
+if ! docker info >/dev/null 2>&1; then
+  note "Starting Docker..."; open -ga OrbStack 2>/dev/null || open -ga Docker 2>/dev/null || true
+  for i in {1..60}; do docker info >/dev/null 2>&1 && break; sleep 2; done
+  docker info >/dev/null 2>&1 || die "Docker isn't running. Start OrbStack or Docker Desktop and re-run."
+fi
+browser=""
+for b in "Google Chrome" "Brave Browser" "Microsoft Edge" "Chromium"; do
+  [[ -x "/Applications/$b.app/Contents/MacOS/$b" ]] && { browser=$b; break; }
+done
+[[ -n $browser ]] || die "A Chromium browser is needed for the Proton sign-in (Chrome, Brave, Edge)"
+[[ -n $with_claude ]] && ! command -v claude >/dev/null && die "--with-claude needs Claude Code installed first"
+# Ports must be free, unless this is a re-install (our own services own them).
+ours=$(launchctl list 2>/dev/null | awk '{print $3}' | grep -c "^$LUMO_LABEL\\." || true)
+if (( ours == 0 )); then
+  for p in $TAMER_PORT $LITELLM_PORT $WEBUI_PORT $CODE_WEB_PORT $HOME_PORT; do
+    curl -s -m 1 -o /dev/null http://127.0.0.1:$p/ && die "port $p is already in use by another program"
+  done
+else
+  note "existing install found ($ours services): re-installing over it"
+fi
+note "${grn}ok${rst}: macOS, git, Node $(node -v), $(python3 -V), Docker, $browser"
+
+# --- 2. Consent --------------------------------------------------------------
+step "Before you continue"
+cat <<'EOF'
+    This installs an UNOFFICIAL bridge to Proton Lumo (lumo-tamer, a community
+    project not affiliated with Proton). It talks to Lumo the way Proton's web
+    app does. Proton could block it, and it could put your Proton account at
+    risk. Your Proton login is stored encrypted on this Mac; the encryption key
+    goes in your macOS Keychain.
+
+    Proton Unlimited includes free-tier Lumo; Lumo Plus raises usage limits.
+    Everything runs on this Mac and listens on 127.0.0.1 only.
+EOF
+if [[ -z $yes && -z $dry ]]; then
+  read "ans?    Type 'yes' to continue: "; [[ $ans == yes ]] || die "cancelled"
+fi
+
+# --- 3. Workspace ------------------------------------------------------------
+step "Workspace"
+run mkdir -p $LUMO_HOME/code $LUMO_HOME/inbox $LUMO_HOME/out $LOG_DIR
+run chmod 700 $LUMO_HOME
+note "$LUMO_HOME/{code,inbox,out}"
+
+# --- 4. lumo-tamer -----------------------------------------------------------
+step "lumo-tamer (Lumo bridge) at $TAMER_COMMIT"
+if [[ ! -d $TAMER_DIR/.git ]]; then
+  run git clone -q https://github.com/ZeroTricks/lumo-tamer.git $TAMER_DIR
+  run git -C $TAMER_DIR checkout -q $TAMER_COMMIT
+  run git -C $TAMER_DIR apply $LUMO_STACK/patches/lumo-tamer-localhost.patch
+  note "patched to listen on 127.0.0.1 only"
+else
+  note "already present"
+fi
+if [[ ! -x $TAMER_DIR/dist/src/tamer.js && ! -f $TAMER_DIR/dist/src/tamer.js ]]; then
+  note "building (npm ci + build, a few minutes)..."
+  run sh -c "cd '$TAMER_DIR' && npm ci --no-audit --no-fund -s && npm run -s build"
+fi
+export TAMER_KEY
+if [[ -f $TAMER_DIR/config.yaml ]]; then
+  TAMER_KEY=$(tamer_key); note "config.yaml kept"
+else
+  TAMER_KEY="lt-$(key)"; ( umask 077; render $LUMO_STACK/templates/tamer-config.yaml $TAMER_DIR/config.yaml )
+  note "config.yaml written (random API key, tool calling on)"
+fi
+
+# --- 5. LiteLLM --------------------------------------------------------------
+step "LiteLLM $LITELLM_VERSION (model router)"
+run mkdir -p $LITELLM_DIR
+if [[ ! -x $LITELLM_DIR/venv/bin/litellm ]]; then
+  run python3 -m venv $LITELLM_DIR/venv
+  note "installing (large download, can take several minutes)..."
+  run $LITELLM_DIR/venv/bin/pip install -q --disable-pip-version-check --retries 10 --timeout 120 "litellm[proxy]==$LITELLM_VERSION"
+else
+  note "already installed"
+fi
+export LITELLM_KEY
+if [[ -f $LITELLM_CFG ]]; then
+  note "config.yaml kept"
+else
+  LITELLM_KEY="sk-$(key)"; ( umask 077; render $LUMO_STACK/templates/litellm-config.yaml $LITELLM_CFG )
+  note "config.yaml written (routes only to lumo-tamer)"
+fi
+
+# --- 6. Background services (LaunchAgents) -----------------------------------
+step "Background services"
+export LABEL=$LUMO_LABEL NODE=$(command -v node) PYTHON=$(command -v python3) TAMER_DIR LITELLM_DIR LOG_DIR LUMO_STACK
+export AGENT_PATH="$BIN_DIR:${$(command -v docker):h}:${$(command -v node):h}:/usr/bin:/bin:/usr/sbin:/sbin"
+for a in lumo-tamer litellm lumo-home lumo-watch; do
+  dest=~/Library/LaunchAgents/$LUMO_LABEL.$a.plist
+  render $LUMO_STACK/templates/launchagents/$a.plist $dest
+  run launchctl unload $dest 2>/dev/null || true
+  run launchctl load $dest
+  note "$LUMO_LABEL.$a"
+done
+
+# --- 7. Containers -----------------------------------------------------------
+step "Containers (jail network, relay, OpenCode, Open WebUI)"
+docker network inspect lumo-jail >/dev/null 2>&1 || run docker network create --internal lumo-jail >/dev/null
+docker network inspect lumo-web-only >/dev/null 2>&1 \
+  || run docker network create -o com.docker.network.bridge.enable_ip_masquerade=false lumo-web-only >/dev/null
+if ! docker container inspect lumo-relay >/dev/null 2>&1; then
+  run docker run -d --name lumo-relay --restart unless-stopped --read-only --cap-drop ALL \
+    --security-opt no-new-privileges --memory 64m $SOCAT_IMAGE \
+    TCP-LISTEN:4000,fork,reuseaddr TCP:host.docker.internal:$LITELLM_PORT >/dev/null
+  run docker network connect --alias lumo-relay lumo-jail lumo-relay
+fi
+note "lumo-jail (no internet) + lumo-relay (only path to Lumo)"
+if ! docker image inspect lumo-opencode:$OPENCODE_VERSION >/dev/null 2>&1; then
+  note "building OpenCode $OPENCODE_VERSION image..."
+  run docker build -q -t lumo-opencode:$OPENCODE_VERSION -f $LUMO_STACK/Dockerfile.opencode $LUMO_STACK >/dev/null
+fi
+note "lumo-opencode:$OPENCODE_VERSION"
+if ! docker container inspect lumo-webui >/dev/null 2>&1; then
+  note "pulling Open WebUI (large, first time only)..."
+  run docker pull -q $WEBUI_IMAGE >/dev/null
+  run $LUMO_STACK/webui-create
+fi
+note "lumo-webui on 127.0.0.1:$WEBUI_PORT"
+
+# --- 8. Commands -------------------------------------------------------------
+step "Commands"
+run mkdir -p $BIN_DIR
+run ln -sf $LUMO_STACK/lumo $BIN_DIR/lumo
+[[ -n $with_claude ]] && run ln -sf $LUMO_STACK/claude-lumo $BIN_DIR/claude-lumo
+note "$BIN_DIR/lumo${with_claude:+, $BIN_DIR/claude-lumo}"
+[[ :$PATH: == *:$BIN_DIR:* ]] || note "${red}add $BIN_DIR to your PATH${rst}: echo 'export PATH=\"$BIN_DIR:\$PATH\"' >> ~/.zprofile"
+
+# --- 9. Proton sign-in + check -------------------------------------------------
+if [[ -n $dry ]]; then step "Done (dry run): nothing was changed"; exit 0; fi
+if [[ -z $no_login ]] && ! (cd $TAMER_DIR && node dist/src/tamer.js auth status 2>&1 | grep -q "configured and valid"); then
+  step "Sign in to Proton"
+  note "A $browser window will open on Lumo. Sign in; it closes by itself when done."
+  $LUMO_STACK/lumo-login || note "${red}sign-in didn't finish${rst}: run 'lumo login' later"
+fi
+step "Checking everything"
+$LUMO_STACK/lumo-doctor || true
+step "Installed"
+cat <<EOF
+    lumo home      dashboard: status, sign-in, files, chat, code
+    lumo           coding assistant in the terminal (jailed to $LUMO_HOME)
+    lumo web       chat in the browser
+    lumo help      everything else
+EOF

@@ -1,0 +1,30 @@
+#!/bin/zsh
+# Bring up the Lumo stack, starting whatever is down:
+#   lumo-tamer (LaunchAgent) -> LiteLLM (LaunchAgent) -> Docker (with --docker)
+# Used by lumo, lumo-code and lumo-web.
+#   lumo-up            servers only
+#   lumo-up --docker   servers + Docker (OrbStack or Docker Desktop)
+source ${0:A:h}/lib.zsh
+LOG=$LOG_DIR/lumo-up.log
+log() { print -r -- "$(date '+%Y-%m-%d %H:%M:%S') [$$] $*" >> "$LOG"; }
+die() { log "ABORT: $*"; print -u2 "lumo-up: $*"; exit 1; }
+
+up() {  # up <label> <agent> <health url>
+  curl -s -m 3 -o /dev/null $3 && return
+  log "starting $1"; print -nu2 "Starting $1"
+  launchctl kickstart gui/$(id -u)/$(agent $2) 2>/dev/null \
+    || launchctl load ~/Library/LaunchAgents/$(agent $2).plist
+  for i in {1..45}; do curl -s -m 2 -o /dev/null $3 && break; print -nu2 "."; sleep 2; done; print -u2
+  curl -s -m 3 -o /dev/null $3 || die "$1 didn't start (see $LOG_DIR)"
+}
+
+up lumo-tamer lumo-tamer http://127.0.0.1:$TAMER_PORT/health
+up LiteLLM    litellm    http://127.0.0.1:$LITELLM_PORT/health/liveliness
+
+if [[ $1 == --docker ]] && ! docker info >/dev/null 2>&1; then
+  log "starting Docker"; print -nu2 "Starting Docker"
+  open -ga OrbStack 2>/dev/null || open -ga Docker 2>/dev/null
+  for i in {1..60}; do docker info >/dev/null 2>&1 && break; print -nu2 "."; sleep 2; done; print -u2
+  docker info >/dev/null 2>&1 || die "Docker didn't start (open OrbStack or Docker Desktop)"
+fi
+log "up: lumo-tamer, LiteLLM${1:+, Docker}"

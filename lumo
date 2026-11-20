@@ -1,0 +1,101 @@
+#!/bin/zsh
+# One command for the Lumo stack. Starts anything that's down first.
+#   lumo home                       dashboard in the browser (status, login, files, chat, code)
+#   lumo login                      sign in to Proton (opens a browser, saves the login)
+#   lumo [--max]                    coding assistant in the workspace (OpenCode, jailed)
+#   lumo open <project> [--max]     coding assistant in code/<project>
+#   lumo run [-p project] "task"    one-shot coding task
+#   lumo code-web [project|stop]    coding assistant in the browser
+#   lumo web                        chat in the browser (Open WebUI)
+#   lumo ask "question"             quick answer, no tools
+#   lumo chat                       plain terminal chat
+#   lumo import <file|folder>...    copy into inbox/ (read-only for Lumo)
+#   lumo fetch <url>                download a document into inbox/ (via this Mac)
+#   lumo export [folder]            copy out/ to a folder (default ~/Downloads)
+#   lumo projects                   list projects
+#   lumo snapshots <project>        list undo points
+#   lumo restore <project> <id>     roll a project back to an undo point
+#   lumo claude                     Claude Code on Lumo (optional, not jailed)
+#   lumo doctor | update | status | logs | help
+source ${0:A:h}/lib.zsh
+STACK=$LUMO_STACK
+die() { print -u2 "lumo: $*"; exit 1; }
+proj_dir() { [[ $1 =~ '^[A-Za-z0-9._-]+$' ]] || die "bad project name '$1'"; print $LUMO_HOME/code/$1; }
+
+[[ $1 == -* && $1 != -h && $1 != --help ]] && exec $STACK/lumo-code "$@"
+cmd=$1; (( $# )) && shift
+case $cmd in
+  ""|code)  exec $STACK/lumo-code "$@" ;;
+  home)
+    curl -s -m 2 -o /dev/null http://127.0.0.1:$HOME_PORT/ \
+      || { launchctl kickstart gui/$(id -u)/$(agent lumo-home) 2>/dev/null \
+             || launchctl load ~/Library/LaunchAgents/$(agent lumo-home).plist; sleep 2; }
+    echo "Lumo Home: http://localhost:$HOME_PORT"; [[ -n $LUMO_NO_OPEN ]] || open http://localhost:$HOME_PORT ;;
+  login)    exec $STACK/lumo-login ;;
+  doctor)   exec $STACK/lumo-doctor ;;
+  update)   exec $STACK/lumo-update "$@" ;;
+  open)     [[ -n $1 ]] || die "usage: lumo open <project>"; p=$1; shift; exec $STACK/lumo-code -p $p "$@" ;;
+  run)      if [[ $1 == -p ]]; then exec $STACK/lumo-code -p $2 run "${@:3}"; else exec $STACK/lumo-code run "$@"; fi ;;
+  code-web)
+    if [[ $1 == stop ]]; then docker rm -f lumo-code-web >/dev/null 2>&1; echo "Lumo Code (browser) stopped"; exit; fi
+    p=(); [[ -n $1 ]] && p=(-p $1)
+    $STACK/lumo-code $p --web || exit 1
+    [[ -n $LUMO_NO_OPEN ]] || open http://localhost:$CODE_WEB_PORT ;;
+  web)      exec $STACK/lumo-web "$@" ;;
+  claude)   [[ -x $STACK/claude-lumo ]] || die "Claude Code add-on not installed (./install --with-claude)"
+            exec $STACK/claude-lumo "$@" ;;
+  ask)      $STACK/lumo-up || exit 1; cd $TAMER_DIR && exec node dist/src/tamer.js "$*" ;;
+  chat)     $STACK/lumo-up || exit 1; cd $TAMER_DIR && exec node dist/src/tamer.js ;;
+  import)
+    (( $# )) || die "usage: lumo import <file|folder>..."
+    for f in "$@"; do
+      [[ -e $f ]] || die "not found: $f"
+      cp -RL "$f" $LUMO_HOME/inbox/ && echo "imported $(basename "$f") -> $LUMO_HOME/inbox (Lumo sees /lumo/inbox)"
+    done ;;
+  fetch)
+    [[ -n $1 ]] || die "usage: lumo fetch <url>"
+    LUMO_HOME=$LUMO_HOME python3 -c 'import importlib.util,sys
+s=importlib.util.spec_from_file_location("h",sys.argv[1]); h=importlib.util.module_from_spec(s); s.loader.exec_module(h)
+try:
+    n,b=h.fetch_url(sys.argv[2]); print(f"saved {n} ({b} bytes) -> inbox (Lumo sees /lumo/inbox)")
+except Exception as e:
+    sys.exit(f"lumo: could not fetch: {e}")' $STACK/lumo-home.py "$1" ;;
+  export)
+    dest=${1:-$HOME/Downloads/lumo-out-$(date +%Y%m%d-%H%M%S)}
+    [[ -n $(ls -A $LUMO_HOME/out) ]] || die "$LUMO_HOME/out is empty"
+    mkdir -p "$dest" && cp -R $LUMO_HOME/out/. "$dest/" && echo "exported $LUMO_HOME/out -> $dest" ;;
+  projects)
+    for d in $LUMO_HOME/code/*(N/); do
+      last=$(git -C $d log -1 --format='%cr' 2>/dev/null); echo "$(basename $d)\t${last:+last snapshot $last}"
+    done | column -t -s $'\t' ;;
+  snapshots)
+    d=$(proj_dir ${1:?usage: lumo snapshots <project>}) || exit 1
+    git -C $d log --format='%h  %cd  %s' --date=format:'%Y-%m-%d %H:%M' -20 ;;
+  restore)
+    d=$(proj_dir ${1:?usage: lumo restore <project> <id>}) || exit 1; id=${2:?usage: lumo restore <project> <id>}
+    g=(git -C $d -c user.name=lumo -c user.email=lumo@localhost)
+    $g rev-parse -q --verify "$id^{commit}" >/dev/null || die "no snapshot '$id' in $1 (lumo snapshots $1)"
+    # Save the current state first, so the restore itself can be undone.
+    $g add -A && $g commit -qm "lumo pre-restore $(date '+%Y-%m-%d %H:%M:%S')" --allow-empty
+    pre=$($g rev-parse --short HEAD)
+    $g restore --source=$id --staged --worktree -- . && $g clean -fdq \
+      && $g commit -qm "lumo restored to $id" --allow-empty \
+      && echo "restored $1 to $id (undo this with: lumo restore $1 $pre)" ;;
+  status)
+    chk() { curl -s -m 2 -o /dev/null $2 && echo "up    $1" || echo "down  $1"; }
+    chk "lumo-tamer   127.0.0.1:$TAMER_PORT" http://127.0.0.1:$TAMER_PORT/health
+    chk "LiteLLM      127.0.0.1:$LITELLM_PORT" http://127.0.0.1:$LITELLM_PORT/health/liveliness
+    docker info >/dev/null 2>&1 && echo "up    Docker" || echo "down  Docker"
+    [[ $(docker inspect -f '{{.State.Running}}' lumo-relay 2>/dev/null) == true ]] && echo "up    lumo-relay (jail network)" || echo "down  lumo-relay (jail network)"
+    chk "Open WebUI   localhost:$WEBUI_PORT" http://127.0.0.1:$WEBUI_PORT/health
+    chk "Lumo Code    localhost:$CODE_WEB_PORT" http://127.0.0.1:$CODE_WEB_PORT
+    chk "Lumo Home    localhost:$HOME_PORT" http://127.0.0.1:$HOME_PORT/
+    (cd $TAMER_DIR && node dist/src/tamer.js auth status 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -E 'expiresIn|valid|attention' | sed 's/^ */      Proton login: /')
+    ;;
+  logs)
+    for f in lumo-code lumo-web lumo-up lumo-login lumo-watch claude-lumo; do
+      [[ -r $LOG_DIR/$f.log ]] && { echo "== $f"; tail -3 $LOG_DIR/$f.log; }
+    done ;;
+  -h|--help|help) sed -n '2,20p' ${0:A} | sed 's/^# \{0,1\}//' ;;
+  *) die "unknown command '$cmd' (lumo help)" ;;
+esac

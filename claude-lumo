@@ -1,0 +1,42 @@
+#!/bin/zsh
+# Optional add-on: Claude Code with Lumo as the ONLY model, no Anthropic account.
+#   Claude Code -> LiteLLM (localhost) -> lumo-tamer -> Lumo
+# Refuses to start if anything could route elsewhere. Not jailed: it runs on
+# this Mac with Claude Code's own permission prompts. Use `lumo` for jailed work.
+source ${0:A:h}/lib.zsh
+LOG=$LOG_DIR/claude-lumo.log
+log() { print -r -- "$(date '+%Y-%m-%d %H:%M:%S') [$$] $*" >> "$LOG"; }
+die() { log "ABORT: $*"; print -u2 "claude-lumo: $*"; exit 1; }
+command -v claude >/dev/null || die "Claude Code isn't installed (https://claude.com/claude-code)"
+log "launch: cwd=$PWD args=$*"
+
+# 1. LiteLLM may only route to lumo-tamer on localhost.
+[[ -r $LITELLM_CFG ]] || die "missing $LITELLM_CFG"
+cfg=$(grep -vE '^\s*#' $LITELLM_CFG)
+[[ $(print -r -- "$cfg" | grep -E '^\s*api_base:' | sed 's/^ *//' | sort -u) == "api_base: http://127.0.0.1:$TAMER_PORT/v1" ]] \
+  || die "LiteLLM config routes somewhere other than lumo-tamer"
+print -r -- "$cfg" | grep -E '^\s*model:' | grep -qvE 'model: openai/lumo(-max|-lite)?$' && die "LiteLLM config has a non-Lumo model"
+print -r -- "$cfg" | grep -qiE 'anthropic|claude' && die "LiteLLM config mentions anthropic/claude"
+log "check: LiteLLM routes only to lumo-tamer"
+
+# 2. Servers up (starts them if needed).
+${0:A:h}/lumo-up || die "stack didn't come up"
+
+# 3. Every model slot is Lumo; no Anthropic key; no telemetry or update checks.
+unset ANTHROPIC_API_KEY CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX
+export ANTHROPIC_BASE_URL=http://localhost:$LITELLM_PORT
+export ANTHROPIC_AUTH_TOKEN=$(litellm_key)
+[[ -n $ANTHROPIC_AUTH_TOKEN ]] || die "no master_key in $LITELLM_CFG"
+export ANTHROPIC_MODEL=lumo ANTHROPIC_DEFAULT_OPUS_MODEL=lumo-max ANTHROPIC_DEFAULT_SONNET_MODEL=lumo
+export ANTHROPIC_DEFAULT_HAIKU_MODEL=lumo-lite ANTHROPIC_SMALL_FAST_MODEL=lumo-lite CLAUDE_CODE_SUBAGENT_MODEL=lumo
+# Lumo's real window is unknown; set LUMO_CONTEXT_TOKENS to cap it.
+[[ -n $LUMO_CONTEXT_TOKENS ]] && export CLAUDE_CODE_MAX_CONTEXT_TOKENS=$LUMO_CONTEXT_TOKENS
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 DISABLE_AUTOUPDATER=1 DISABLE_TELEMETRY=1 DISABLE_ERROR_REPORTING=1
+
+# 4. No MCP servers (they open their own connections). LUMO_KEEP_MCP=1 keeps them.
+mcp=(--strict-mcp-config); [[ $LUMO_KEEP_MCP == 1 ]] && mcp=()
+log "start: model=lumo ctx=${CLAUDE_CODE_MAX_CONTEXT_TOKENS:-default} mcp=${mcp:-kept}"
+claude "${mcp[@]}" "$@"
+code=$?
+log "exit: code=$code"
+exit $code

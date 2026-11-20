@@ -1,0 +1,70 @@
+#!/bin/zsh
+# One-step Proton login for lumo-tamer:
+#   1. opens Chrome/Brave/Edge/Chromium with a throwaway profile on lumo.proton.me
+#   2. waits for you to sign in (up to 10 minutes)
+#   3. saves the login into lumo-tamer's encrypted vault
+#   4. closes that browser, deletes the profile, restarts lumo-tamer, tests Lumo
+# Progress goes to stdout and .login-state (read by Lumo Home).
+
+source ${0:A:h}/lib.zsh
+LOG=$LOG_DIR/lumo-login.log
+STATE=$LUMO_STACK/.login-state
+TAMER=$TAMER_DIR
+PORT=9222
+log()   { print -r -- "$(date '+%Y-%m-%d %H:%M:%S') [$$] $*" >> "$LOG"; }
+last=""
+state() { print -r -- "$1|$2|$(date +%s)" > $STATE; [[ "$1|$2" == $last ]] && return; last="$1|$2"; log "$1: $2"; print -r -- "$2"; }
+VAULT=$TAMER/sessions/vault.enc
+profile="" bpid="" ok=""
+cleanup() {
+  [[ -n $bpid ]] && kill $bpid 2>/dev/null && sleep 1 && kill -9 $bpid 2>/dev/null
+  [[ -n $profile && -d $profile ]] && rm -rf $profile
+}
+# Keep the current login until the new one is proven to work.
+[[ -f $VAULT ]] && cp -p $VAULT $VAULT.lumo-login.bak
+finish() {
+  cleanup
+  if [[ -z $ok && -f $VAULT.lumo-login.bak ]] && ! cmp -s $VAULT $VAULT.lumo-login.bak; then
+    cp -p $VAULT.lumo-login.bak $VAULT && log "restored previous login (new one didn't work)"
+    launchctl kickstart -k gui/$(id -u)/$(agent lumo-tamer)
+  fi
+  rm -f $VAULT.lumo-login.bak
+}
+trap finish EXIT
+trap 'state failed "Login cancelled."; exit 1' INT TERM
+
+for b in "Google Chrome" "Brave Browser" "Microsoft Edge" "Chromium"; do
+  bin="/Applications/$b.app/Contents/MacOS/$b"; [[ -x $bin ]] && break; bin=""
+done
+[[ -n $bin ]] || { state failed "No Chromium browser found (install Chrome or Brave)."; exit 1; }
+curl -s -m 1 -o /dev/null http://127.0.0.1:$PORT/json/version \
+  && { state failed "Port $PORT is busy (another debugging browser is open). Close it and retry."; exit 1; }
+
+profile=$(mktemp -d -t lumo-login)
+state waiting "Sign in to Lumo in the browser window that just opened."
+"$bin" --remote-debugging-port=$PORT --user-data-dir=$profile --no-first-run \
+  --no-default-browser-check --new-window https://lumo.proton.me >/dev/null 2>&1 &
+bpid=$!
+for i in {1..30}; do curl -s -m 1 -o /dev/null http://127.0.0.1:$PORT/json/version && break; sleep 1; done
+
+deadline=$(( $(date +%s) + 600 ))
+while (( $(date +%s) < deadline )); do
+  kill -0 $bpid 2>/dev/null || { state failed "The login browser was closed before sign-in finished."; exit 1; }
+  out=$(cd $TAMER && printf 'http://localhost:%s\n' $PORT | timeout 45 node dist/src/tamer.js auth browser 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
+  if print -r -- "$out" | grep -q "configured and valid"; then
+    state saving "Signed in. Saving the login..."
+    cleanup; bpid=""; profile=""
+    launchctl kickstart -k gui/$(id -u)/$(agent lumo-tamer)
+    for i in {1..30}; do curl -s -m 2 -o /dev/null http://127.0.0.1:$TAMER_PORT/health && break; sleep 1; done
+    key=$(tamer_key)
+    reply=$(curl -s -m 90 http://127.0.0.1:$TAMER_PORT/v1/chat/completions -H "Authorization: Bearer $key" \
+      -H "Content-Type: application/json" -d '{"model":"lumo","messages":[{"role":"user","content":"Reply with exactly: ok"}]}' \
+      | python3 -c "import json,sys; print(json.load(sys.stdin)['choices'][0]['message']['content'])" 2>/dev/null)
+    if [[ -n $reply ]]; then ok=1; state done "Logged in. Lumo is answering."; exit 0
+    else state failed "The new login didn't work, so the previous one was kept. Try again."; exit 1; fi
+  fi
+  state waiting "Waiting for you to sign in to Lumo in the browser window..."
+  sleep 5
+done
+state failed "Timed out after 10 minutes without a sign-in."
+exit 1

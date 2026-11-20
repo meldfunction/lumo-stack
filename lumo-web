@@ -1,0 +1,33 @@
+#!/bin/zsh
+# Open WebUI for Lumo: make sure everything is running, then open the browser.
+#   lumo-web          start (if needed) and open the chat UI
+#   lumo-web stop     stop the container
+#   lumo-web status   show whether it's running
+source ${0:A:h}/lib.zsh
+LOG=$LOG_DIR/lumo-web.log
+NAME=lumo-webui
+URL=http://localhost:$WEBUI_PORT
+log() { print -r -- "$(date '+%Y-%m-%d %H:%M:%S') [$$] $*" >> "$LOG"; }
+die() { log "ABORT: $*"; print -u2 "lumo-web: $*"; exit 1; }
+
+case $1 in
+  stop)   docker stop $NAME >/dev/null && log "stop" && echo "lumo-web stopped"; exit ;;
+  status) docker ps --filter name=^$NAME$ --format '{{.Status}}' | grep . || echo "not running"; exit ;;
+esac
+
+log "launch"
+$LUMO_STACK/lumo-up --docker || die "stack didn't come up"
+docker container inspect $NAME >/dev/null 2>&1 || $LUMO_STACK/webui-create || die "couldn't create $NAME"
+if [[ $(docker inspect -f '{{.State.Running}}' $NAME) != true ]]; then
+  log "starting container"; docker start $NAME >/dev/null || die "docker start failed"
+fi
+print -n "Waiting for Open WebUI"
+for i in {1..60}; do
+  curl -s -m 2 http://127.0.0.1:$WEBUI_PORT/health | grep -q true && break
+  print -n "."; sleep 2
+done
+echo
+curl -s -m 2 http://127.0.0.1:$WEBUI_PORT/health | grep -q true || die "Open WebUI didn't come up (docker logs $NAME)"
+log "ready: $URL"
+echo "Open WebUI ready: $URL"
+[[ -n $LUMO_WEB_NO_OPEN ]] || open $URL

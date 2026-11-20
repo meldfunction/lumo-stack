@@ -1,0 +1,13 @@
+diff --git a/src/api/server.ts b/src/api/server.ts
+index 1180654..03c7044 100644
+--- a/src/api/server.ts
++++ b/src/api/server.ts
+@@ -76,7 +76,7 @@ export class APIServer {
+     validateTemplateOnce(this.serverConfig.instructions.template);
+ 
+     return new Promise((resolve) => {
+-      this.expressApp.listen(this.serverConfig.port, () => {
++      this.expressApp.listen(this.serverConfig.port, '127.0.0.1', () => {
+         logger.info('========================================');
+         logger.info('lumo-tamer is ready!');
+         logger.info(`  base_url: http://localhost:${this.serverConfig.port}/v1`);

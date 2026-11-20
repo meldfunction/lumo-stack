@@ -1,0 +1,12 @@
+# Machine-specific settings and runtime state
+lumo.env
+.login-state
+.watch-state
+.Dockerfile.tmp
+__pycache__/
+*.pyc
+# Installed components (created by ./install)
+vendor/
+litellm/
+# macOS
+.DS_Store

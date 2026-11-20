@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>{{LABEL}}.lumo-tamer</string>
+  <key>ProgramArguments</key><array>
+    <string>{{NODE}}</string><string>{{TAMER_DIR}}/dist/src/tamer.js</string><string>server</string>
+  </array>
+  <key>WorkingDirectory</key><string>{{TAMER_DIR}}</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>StandardOutPath</key><string>{{LOG_DIR}}/lumo-tamer.log</string>
+  <key>StandardErrorPath</key><string>{{LOG_DIR}}/lumo-tamer.log</string>
+</dict></plist>

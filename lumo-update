@@ -1,0 +1,102 @@
+#!/bin/zsh
+# Safe updates for pinned components. Each one is checked afterwards and rolled
+# back if the check fails.
+#   lumo update                    show what's installed and what's available
+#   lumo update opencode [ver]     OpenCode (default: newest release at least 14 days old)
+#   lumo update webui              Open WebUI (pull, recreate, keeps chats)
+#   lumo update litellm            LiteLLM in its own virtualenv
+#   lumo update tamer [ref]        lumo-tamer (default: upstream main)
+# Add --yes to skip the confirmation.
+source ${0:A:h}/lib.zsh
+LOG=$LOG_DIR/lumo-update.log
+log() { print -r -- "$(date '+%Y-%m-%d %H:%M:%S') [$$] $*" >> "$LOG"; }
+die() { log "ABORT: $*"; print -u2 "lumo update: $*"; exit 1; }
+yes=""; args=(); for a in "$@"; do [[ $a == --yes ]] && yes=1 || args+=($a); done; set -- $args
+confirm() { [[ -n $yes ]] && return; read -q "?$1 [y/N] " || { echo; exit 1; }; echo; }
+setver() { sed -i '' "s|^$1=.*|$1=$2|" $LUMO_STACK/versions.env; }
+
+opencode_candidate() {  # newest release >= 14 days old
+  npm view opencode-ai time --json 2>/dev/null | python3 -c '
+import json,sys,datetime as d
+t=json.load(sys.stdin); now=d.datetime.now(d.timezone.utc)
+v=[(k,d.datetime.fromisoformat(t[k].replace("Z","+00:00"))) for k in t if k[0].isdigit() and "-" not in k]
+ok=[k for k,w in sorted(v,key=lambda x:x[1]) if (now-w).days>=14]; print(ok[-1] if ok else "")'
+}
+
+case $1 in
+  "")
+    print "OpenCode    installed $OPENCODE_VERSION, candidate $(opencode_candidate)"
+    print "Open WebUI  image $WEBUI_IMAGE ($WEBUI_IMAGE_ID)"
+    print "LiteLLM     $($LITELLM_DIR/venv/bin/pip show litellm 2>/dev/null | sed -n 's/^Version: //p')"
+    git -C $TAMER_DIR fetch -q origin 2>/dev/null
+    print "lumo-tamer  at $TAMER_COMMIT, $(git -C $TAMER_DIR rev-list --count HEAD..origin/main 2>/dev/null || echo '?') newer commit(s) upstream"
+    ;;
+
+  opencode)
+    new=${2:-$(opencode_candidate)}; [[ -n $new ]] || die "couldn't find a release"
+    [[ $new == $OPENCODE_VERSION ]] && { echo "OpenCode is already $new"; exit 0; }
+    confirm "Build OpenCode $new (now $OPENCODE_VERSION)?"
+    log "opencode: $OPENCODE_VERSION -> $new"
+    sed "s/opencode-ai@[0-9.]*/opencode-ai@$new/" $LUMO_STACK/Dockerfile.opencode > $LUMO_STACK/.Dockerfile.tmp
+    docker build -q -t lumo-opencode:$new -f $LUMO_STACK/.Dockerfile.tmp $LUMO_STACK >/dev/null || { rm -f $LUMO_STACK/.Dockerfile.tmp; die "build failed"; }
+    v=$(docker run --rm --entrypoint opencode lumo-opencode:$new --version 2>/dev/null)
+    [[ $v == *$new* ]] || { rm -f $LUMO_STACK/.Dockerfile.tmp; die "new image doesn't run (kept $OPENCODE_VERSION)"; }
+    mv $LUMO_STACK/.Dockerfile.tmp $LUMO_STACK/Dockerfile.opencode
+    setver OPENCODE_VERSION $new
+    echo "OpenCode $new ready (old image lumo-opencode:$OPENCODE_VERSION kept; to go back: lumo update opencode $OPENCODE_VERSION)" ;;
+
+  webui)
+    confirm "Pull the latest Open WebUI and recreate it (chats are kept)?"
+    old=$WEBUI_IMAGE_ID
+    docker tag $WEBUI_IMAGE lumo-webui:previous 2>/dev/null
+    docker pull -q $WEBUI_IMAGE >/dev/null || die "pull failed"
+    new=$(docker image inspect -f '{{.Id}}' $WEBUI_IMAGE | cut -c8-19)
+    [[ $new == $old ]] && { echo "Open WebUI is already current"; exit 0; }
+    log "webui: $old -> $new"
+    $LUMO_STACK/webui-create || die "recreate failed"
+    for i in {1..60}; do curl -s -m 2 http://127.0.0.1:$WEBUI_PORT/health | grep -q true && break; sleep 2; done
+    if curl -s -m 2 http://127.0.0.1:$WEBUI_PORT/health | grep -q true; then
+      setver WEBUI_IMAGE_ID $new; echo "Open WebUI updated ($new)"
+    else
+      log "webui: rollback"; docker tag lumo-webui:previous $WEBUI_IMAGE && $LUMO_STACK/webui-create
+      die "new version didn't start; rolled back to $old"
+    fi ;;
+
+  litellm)
+    pip=$LITELLM_DIR/venv/bin/pip
+    confirm "Upgrade LiteLLM (now $($pip show litellm | sed -n 's/^Version: //p'))?"
+    $pip freeze > $LITELLM_DIR/.freeze-before-update
+    $pip install -q --upgrade 'litellm[proxy]' || die "upgrade failed"
+    launchctl kickstart -k gui/$(id -u)/$(agent litellm)
+    for i in {1..45}; do curl -s -m 2 -o /dev/null http://127.0.0.1:$LITELLM_PORT/health/liveliness && break; sleep 2; done
+    if curl -s -m 2 -o /dev/null http://127.0.0.1:$LITELLM_PORT/health/liveliness; then
+      echo "LiteLLM $($pip show litellm | sed -n 's/^Version: //p') running"; log "litellm: upgraded"
+    else
+      log "litellm: rollback"; $pip install -q -r $LITELLM_DIR/.freeze-before-update
+      launchctl kickstart -k gui/$(id -u)/$(agent litellm); die "new version didn't start; rolled back"
+    fi ;;
+
+  tamer)
+    ref=${2:-origin/main}
+    git -C $TAMER_DIR fetch -q origin || die "fetch failed"
+    new=$(git -C $TAMER_DIR rev-parse --short "$ref") || die "unknown ref $ref"
+    [[ $new == $TAMER_COMMIT ]] && { echo "lumo-tamer is already $new"; exit 0; }
+    git -C $TAMER_DIR log --oneline $TAMER_COMMIT..$new | head -15
+    confirm "Update lumo-tamer $TAMER_COMMIT -> $new? (review the commits above first)"
+    log "tamer: $TAMER_COMMIT -> $new"
+    back() { log "tamer: rollback"; git -C $TAMER_DIR checkout -q -- . ; git -C $TAMER_DIR checkout -q $TAMER_COMMIT \
+             && git -C $TAMER_DIR apply $LUMO_STACK/patches/lumo-tamer-localhost.patch \
+             && (cd $TAMER_DIR && npm ci --no-audit --no-fund -s && npm run -s build) >/dev/null
+             launchctl kickstart -k gui/$(id -u)/$(agent lumo-tamer); die "$1; rolled back to $TAMER_COMMIT"; }
+    git -C $TAMER_DIR checkout -q -- . && git -C $TAMER_DIR checkout -q $new || back "checkout failed"
+    git -C $TAMER_DIR apply $LUMO_STACK/patches/lumo-tamer-localhost.patch || back "localhost patch no longer applies"
+    (cd $TAMER_DIR && npm ci --no-audit --no-fund -s && npm run -s build) >/dev/null || back "build failed"
+    launchctl kickstart -k gui/$(id -u)/$(agent lumo-tamer)
+    for i in {1..30}; do curl -s -m 2 -o /dev/null http://127.0.0.1:$TAMER_PORT/health && break; sleep 2; done
+    r=$(curl -s -m 90 http://127.0.0.1:$TAMER_PORT/v1/chat/completions -H "Authorization: Bearer $(tamer_key)" -H "Content-Type: application/json" \
+      -d '{"model":"lumo","messages":[{"role":"user","content":"Reply with exactly: ok"}]}' | python3 -c "import json,sys; print(json.load(sys.stdin)['choices'][0]['message']['content'])" 2>/dev/null)
+    [[ -n $r ]] || back "Lumo didn't answer after the update"
+    setver TAMER_COMMIT $new; echo "lumo-tamer updated to $new" ;;
+
+  *) sed -n '2,9p' ${0:A} | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

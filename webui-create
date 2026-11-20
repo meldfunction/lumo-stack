@@ -1,0 +1,17 @@
+#!/bin/zsh
+# (Re)create the Open WebUI container. Data lives in the lumo-webui-data
+# volume, so recreating keeps accounts and chats.
+source ${0:A:h}/lib.zsh
+MK=$(litellm_key)
+[[ -n $MK ]] || { print -u2 "webui-create: no LiteLLM master key in $LITELLM_CFG"; exit 1; }
+docker rm -f lumo-webui >/dev/null 2>&1
+docker run -d --name lumo-webui --restart unless-stopped \
+  -p 127.0.0.1:$WEBUI_PORT:8080 \
+  -v lumo-webui-data:/app/backend/data \
+  -e OPENAI_API_BASE_URL=http://host.docker.internal:$LITELLM_PORT/v1 -e OPENAI_API_KEY="$MK" \
+  -e ENABLE_OLLAMA_API=False \
+  -e ENABLE_TITLE_GENERATION=False -e ENABLE_TAGS_GENERATION=False \
+  -e ENABLE_FOLLOW_UP_GENERATION=False -e ENABLE_AUTOCOMPLETE_GENERATION=False \
+  -e ENABLE_EVALUATION_ARENA_MODELS=False \
+  -e ANONYMIZED_TELEMETRY=False -e SCARF_NO_ANALYTICS=true -e DO_NOT_TRACK=true \
+  $WEBUI_IMAGE >/dev/null

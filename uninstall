@@ -1,0 +1,52 @@
+#!/bin/zsh
+# Remove the Lumo Stack from this Mac.
+#   ./uninstall            remove services, containers, commands and keys; keep your workspace
+#   ./uninstall --purge    also delete the workspace (code/ inbox/ out/) and chat history
+#   ./uninstall --yes      don't ask
+# Your Proton account itself is not touched.
+emulate -L zsh
+HERE=${0:A:h}; LUMO_STACK=$HERE
+source $HERE/lib.zsh
+purge="" yes=""
+for a in "$@"; do case $a in --purge) purge=1 ;; --yes) yes=1 ;; esac; done
+say() { print "    $*"; }
+
+print "This removes the Lumo Stack services, containers, commands and stored keys."
+[[ -n $purge ]] && print "--purge: it ALSO deletes $LUMO_HOME and your Open WebUI chats."
+if [[ -z $yes ]]; then read "ans?Type 'yes' to continue: "; [[ $ans == yes ]] || exit 1; fi
+
+print "Services"
+for a in lumo-tamer litellm lumo-home lumo-watch; do
+  f=~/Library/LaunchAgents/$LUMO_LABEL.$a.plist
+  [[ -f $f ]] && { launchctl unload $f 2>/dev/null; rm -f $f; say "removed $LUMO_LABEL.$a"; }
+done
+
+print "Containers"
+if docker info >/dev/null 2>&1; then
+  docker rm -f lumo-code-web lumo-relay lumo-webui >/dev/null 2>&1 && say "removed lumo-code-web, lumo-relay, lumo-webui"
+  docker network rm lumo-jail lumo-web-only >/dev/null 2>&1 && say "removed networks lumo-jail, lumo-web-only"
+  docker image ls --format '{{.Repository}}:{{.Tag}}' | grep '^lumo-opencode:' | xargs -r docker rmi >/dev/null 2>&1 && say "removed lumo-opencode images"
+  docker volume rm lumo-opencode-home >/dev/null 2>&1 && say "removed volume lumo-opencode-home"
+  [[ -n $purge ]] && docker volume rm lumo-webui-data >/dev/null 2>&1 && say "removed Open WebUI data (chats, accounts)"
+else
+  say "Docker isn't running: containers left in place (re-run with Docker up to remove them)"
+fi
+
+print "Keys and login"
+security delete-generic-password -s lumo-stack -a code-web >/dev/null 2>&1 && say "removed browser-UI password from Keychain"
+security delete-generic-password -s lumo-tamer -a vault-key >/dev/null 2>&1 && say "removed Lumo login key from Keychain"
+rm -f $TAMER_DIR/sessions/vault.enc 2>/dev/null && say "removed saved Proton login"
+
+print "Commands and files"
+for c in lumo claude-lumo; do
+  [[ -L $BIN_DIR/$c && ${$(readlink $BIN_DIR/$c):h} == $LUMO_STACK ]] && { rm -f $BIN_DIR/$c; say "removed $BIN_DIR/$c"; }
+done
+[[ $TAMER_DIR == $LUMO_STACK/* ]] && { rm -rf $TAMER_DIR; say "removed $TAMER_DIR"; }
+[[ $LITELLM_DIR == $LUMO_STACK/* ]] && { rm -rf $LITELLM_DIR; say "removed $LITELLM_DIR"; }
+rm -f $LUMO_STACK/.login-state $LUMO_STACK/.watch-state
+if [[ -n $purge ]]; then
+  rm -rf $LUMO_HOME && say "deleted workspace $LUMO_HOME"
+else
+  say "kept your workspace: $LUMO_HOME"
+fi
+print "Done. Delete this folder ($LUMO_STACK) to remove the last of it."

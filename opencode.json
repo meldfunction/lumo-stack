@@ -1,0 +1,53 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "lumo": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Lumo (via LiteLLM)",
+      "options": {
+        "baseURL": "http://lumo-relay:4000/v1",
+        "apiKey": "{env:LITELLM_KEY}"
+      },
+      "models": {
+        "lumo": {
+          "name": "Lumo"
+        },
+        "lumo-max": {
+          "name": "Lumo Max"
+        },
+        "lumo-lite": {
+          "name": "Lumo Lite"
+        }
+      }
+    }
+  },
+  "enabled_providers": [
+    "lumo"
+  ],
+  "model": "lumo/lumo",
+  "small_model": "lumo/lumo-lite",
+  "autoupdate": false,
+  "share": "disabled",
+  "permission": {
+    "edit": "allow",
+    "webfetch": "deny",
+    "bash": {
+      "*": "allow",
+      "rm -rf *": "deny",
+      "rm -fr *": "deny",
+      "sudo *": "deny",
+      "git push*": "deny",
+      "git reset --hard*": "deny",
+      "git filter-branch*": "deny",
+      "git rebase*": "deny",
+      "curl *": "deny",
+      "wget *": "deny",
+      "ssh *": "deny",
+      "scp *": "deny",
+      "dd *": "deny",
+      "mkfs*": "deny",
+      "chmod -R *": "deny",
+      "chown *": "deny"
+    }
+  }
+}

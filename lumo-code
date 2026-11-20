@@ -1,0 +1,121 @@
+#!/bin/zsh
+# OpenCode on Lumo, locked in a container:
+#   /lumo/code   read-write   (projects live here, one folder each)
+#   /lumo/inbox  read-only    (copy files here for it to read)
+#   /lumo/out    read-write   (results for you)
+# Network: internal "lumo-jail" network only; the lumo-relay container forwards
+# to LiteLLM (host:4000) -> lumo-tamer -> Lumo. No other egress.
+# Each session first snapshots the project with git, so `lumo restore` can undo.
+# Every launch is logged to $LOG_DIR/lumo-code.log.
+#   lumo-code [-p project] [--max] [opencode args]     interactive
+#   lumo-code [-p project] [--max] run "task"          one-shot
+#   lumo-code [-p project] --web                       browser UI on :4096
+
+source ${0:A:h}/lib.zsh
+LOG=$LOG_DIR/lumo-code.log
+STACK=$LUMO_STACK
+IMAGE=lumo-opencode:$OPENCODE_VERSION
+WEB_PORT=$CODE_WEB_PORT
+log() { print -r -- "$(date '+%Y-%m-%d %H:%M:%S') [$$] $*" >> "$LOG"; }
+die() { log "ABORT: $*"; print -u2 "lumo-code: $*"; exit 1; }
+
+project="" max="" web=""
+while (( $# )); do
+  case $1 in
+    -p|--project) project=$2; shift 2 ;;
+    --max) max=1; shift ;;
+    --web) web=1; shift ;;
+    *) break ;;
+  esac
+done
+[[ -z $project || $project =~ '^[A-Za-z0-9._-]+$' ]] || die "project names: letters, digits, . _ - only"
+log "launch: project=${project:-<root>} max=${max:-0} web=${web:-0} args=$*"
+
+# 1. Config the agent must not edit lives outside the workspace, and routes only to the relay.
+[[ -r $STACK/opencode.json ]] || die "missing $STACK/opencode.json"
+grep -q '"baseURL": "http://lumo-relay:4000/v1"' $STACK/opencode.json \
+  || die "opencode.json points somewhere other than lumo-relay"
+cfg=$(grep -vE '^\s*#' $LITELLM_CFG)
+[[ $(print -r -- "$cfg" | grep -E '^\s*api_base:' | sed 's/^ *//' | sort -u) == "api_base: http://127.0.0.1:$TAMER_PORT/v1" ]] \
+  || die "LiteLLM config routes somewhere other than lumo-tamer"
+log "check: routes Lumo-only"
+
+# 2. Bring up whatever is down, then the jail network and relay.
+$STACK/lumo-up --docker || die "stack didn't come up"
+docker image inspect $IMAGE >/dev/null 2>&1 || die "image $IMAGE missing (lumo update)"
+[[ $(docker network inspect -f '{{.Internal}}' lumo-jail 2>/dev/null) == true ]] \
+  || die "network lumo-jail missing or not internal"
+[[ $(docker inspect -f '{{.State.Running}}' lumo-relay 2>/dev/null) == true ]] \
+  || { docker start lumo-relay >/dev/null || die "lumo-relay won't start"; }
+log "check: stack, image, jail network, relay ok"
+
+# 3. Project folder, AGENTS.md for new projects, and a git snapshot before work.
+dir=$LUMO_HOME/code${project:+/$project}; wdir=/lumo/code${project:+/$project}
+mkdir -p $dir
+if [[ -n $project && ! -e $dir/AGENTS.md ]]; then
+  sed "s/{{PROJECT}}/$project/g" $STACK/templates/AGENTS.md > $dir/AGENTS.md
+  log "project: created $project with AGENTS.md"
+fi
+g=(git -C $dir -c user.name=lumo -c user.email=lumo@localhost)
+[[ -d $dir/.git ]] || { $g init -q && log "git: init $dir"; }
+if [[ -n $($g status --porcelain 2>/dev/null) ]] || ! $g rev-parse -q HEAD >/dev/null 2>&1; then
+  $g add -A && $g commit -qm "lumo snapshot $(date '+%Y-%m-%d %H:%M:%S')" --allow-empty \
+    && log "git: snapshot $($g rev-parse --short HEAD)"
+fi
+
+export LITELLM_KEY=$(litellm_key)
+[[ -n $LITELLM_KEY ]] || die "no master_key in $LITELLM_CFG"
+
+# 4. The jail (shared by terminal and browser modes).
+jail=(
+  --read-only --tmpfs /tmp:rw,exec,nosuid,size=512m
+  --cap-drop ALL --security-opt no-new-privileges
+  --pids-limit 512 --memory 4g --cpus 4
+  --network lumo-jail
+  -e LITELLM_KEY
+  -v lumo-opencode-home:/home/node
+  -v $STACK/opencode.json:/home/node/.config/opencode/opencode.json:ro
+  -v $LUMO_HOME/code:/lumo/code
+  -v $LUMO_HOME/inbox:/lumo/inbox:ro
+  -v $LUMO_HOME/out:/lumo/out
+  -w $wdir
+)
+model=(); [[ -n $max ]] && model=(-m lumo/lumo-max)
+
+if [[ -n $web ]]; then
+  # Browser UI: internal network has no port publishing, so also attach a
+  # private bridge whose only route out is to this Mac's 127.0.0.1:4096.
+  docker network inspect lumo-web-only >/dev/null 2>&1 \
+    || docker network create --internal=false -o com.docker.network.bridge.enable_ip_masquerade=false lumo-web-only >/dev/null
+  # Login for the browser UI: user "lumo", password kept in macOS Keychain.
+  export OPENCODE_SERVER_USERNAME=lumo
+  export OPENCODE_SERVER_PASSWORD=$(security find-generic-password -s lumo-stack -a code-web -w 2>/dev/null)
+  if [[ -z $OPENCODE_SERVER_PASSWORD ]]; then
+    OPENCODE_SERVER_PASSWORD=$(openssl rand -base64 18 | tr -d '/+=')
+    security add-generic-password -s lumo-stack -a code-web -w "$OPENCODE_SERVER_PASSWORD" -U \
+      || die "couldn't save the browser password to Keychain"
+    log "web: created browser password in Keychain (lumo-stack / code-web)"
+  fi
+  docker rm -f lumo-code-web >/dev/null 2>&1
+  log "start: web $IMAGE on 127.0.0.1:$WEB_PORT project=${project:-<root>}"
+  docker create --name lumo-code-web $jail -p 127.0.0.1:$WEB_PORT:$WEB_PORT \
+    -e OPENCODE_SERVER_USERNAME -e OPENCODE_SERVER_PASSWORD \
+    $IMAGE web --hostname 0.0.0.0 --port $WEB_PORT >/dev/null || die "docker create failed"
+  docker network disconnect lumo-jail lumo-code-web 2>/dev/null
+  docker network connect lumo-web-only lumo-code-web
+  docker network connect lumo-jail lumo-code-web
+  docker start lumo-code-web >/dev/null || die "docker start failed"
+  for i in {1..30}; do curl -s -m 2 -o /dev/null http://127.0.0.1:$WEB_PORT && break; sleep 1; done
+  echo "Lumo Code (browser): http://localhost:$WEB_PORT  (stop: lumo code-web stop)"
+  echo "  login: lumo / password: security find-generic-password -s lumo-stack -a code-web -w"
+  exit 0
+fi
+
+tty=(-i); [[ -t 0 && -t 1 ]] && tty=(-it)
+args=("$@")
+[[ -n $model ]] && { [[ $1 == run ]] && args=(run $model "${@:2}") || args=($model "$@"); }
+log "start: $IMAGE project=${project:-<root>} model=${max:+lumo-max} net=lumo-jail"
+docker run --rm $tty $jail $IMAGE $args
+code=$?
+log "exit: code=$code"
+exit $code

@@ -1,0 +1,5 @@
+server:
+  port: 3003
+  apiKey: "{{TAMER_KEY}}"
+  customTools:
+    enabled: true
