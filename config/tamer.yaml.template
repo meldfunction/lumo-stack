@@ -1,0 +1,11 @@
+server:
+  port: 3003
+  apiKey: "{{TAMER_KEY}}"
+  customTools:
+    enabled: true
+auth:
+  method: browser
+  browser:
+    cdpEndpoint: http://browser:9222
+  vault:
+    keyFilePath: /run/secrets/lumo-vault-key

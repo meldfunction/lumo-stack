@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+# Lumo Stack v0.2 command (macOS and Linux). Windows: bin/lumo.ps1.
+#   lumo [--max]                    coding agent in the terminal (jailed)
+#   lumo open <project> [--max]     coding agent in code/<project>
+#   lumo run [-p project] "task"    one-shot coding task
+#   lumo code-web [project|stop]    coding agent in the browser
+#   lumo web | lumo home            chat / dashboard in the browser
+#   lumo ask "question" | lumo chat quick answer / terminal chat
+#   lumo login [--browser]          sign in to Proton (email+password, or a browser)
+#   lumo import <path>... | fetch <url> | export [dir]
+#   lumo projects | snapshots <p> | restore <p> <id>
+#   lumo up | down | status | logs [service] | doctor | update
+#   claude-lumo                     Claude Code on Lumo (optional)
+set -u
+STACK="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$0")")/.." && pwd)"
+ENV_FILE="$STACK/.env"
+die() { echo "lumo: $*" >&2; exit 1; }
+[ -r "$ENV_FILE" ] || die "not installed yet: run $STACK/install.sh"
+getenv() { sed -n "s/^$1=//p" "$ENV_FILE" | tail -1; }
+WORKSPACE="$(getenv LUMO_WORKSPACE)"
+P_WEBUI="$(getenv LUMO_WEBUI_PORT)"; P_WEBUI="${P_WEBUI:-8080}"
+P_HOME="$(getenv LUMO_HOME_PORT)"; P_HOME="${P_HOME:-8090}"
+P_CODE="$(getenv LUMO_CODEWEB_PORT)"; P_CODE="${P_CODE:-4096}"
+P_LOGIN="$(getenv LUMO_LOGIN_PORT)"; P_LOGIN="${P_LOGIN:-3001}"
+P_LLM="$(getenv LUMO_LITELLM_PORT)"; P_LLM="${P_LLM:-4000}"
+LOG_DIR="$STACK/logs"; mkdir -p "$LOG_DIR"
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [$$] $*" >> "$LOG_DIR/lumo.log"; }
+dc() { docker compose --project-directory "$STACK" -f "$STACK/compose.yaml" "$@"; }
+open_url() { case "$(uname)" in Darwin) open "$1" ;; *) xdg-open "$1" >/dev/null 2>&1 || echo "Open: $1" ;; esac; }
+valid_name() { case "$1" in ''|*[!A-Za-z0-9._-]*) die "project names: letters, digits, . _ - only" ;; esac; }
+
+ensure_up() {
+  docker info >/dev/null 2>&1 || die "Docker isn't running (start OrbStack, Docker Desktop or the docker service)"
+  dc up -d --wait tamer litellm webui home >/dev/null 2>&1 || dc up -d tamer litellm webui home >/dev/null || die "couldn't start the stack (lumo logs)"
+}
+# git, run inside the jail image so the host doesn't need git
+jgit() { local dir="$1"; shift
+  dc run --rm --no-deps -T --entrypoint git code -C "/lumo/code/$dir" -c user.name=lumo -c user.email=lumo@localhost "$@"; }
+snapshot() {
+  local dir="$1"
+  dc run --rm --no-deps -T --entrypoint sh code -c '
+    cd "/lumo/code/'"$dir"'" || exit 1
+    g="git -c user.name=lumo -c user.email=lumo@localhost"
+    [ -d .git ] || $g init -q
+    if [ -n "$($g status --porcelain)" ] || ! $g rev-parse -q HEAD >/dev/null 2>&1; then
+      $g add -A && $g commit -qm "lumo snapshot $(date "+%Y-%m-%d %H:%M:%S")" --allow-empty && $g rev-parse --short HEAD
+    fi' 2>/dev/null
+}
+code_session() {   # code_session <project> <max> <opencode args...>
+  local project="$1" max="$2"; shift 2
+  [ -n "$project" ] && valid_name "$project"
+  ensure_up
+  mkdir -p "$WORKSPACE/code/$project"
+  if [ -n "$project" ] && [ ! -e "$WORKSPACE/code/$project/AGENTS.md" ]; then
+    sed "s/{{PROJECT}}/$project/g" "$STACK/config/AGENTS.md" > "$WORKSPACE/code/$project/AGENTS.md"
+  fi
+  local snap; snap="$(snapshot "$project")"; [ -n "$snap" ] && log "snapshot ${project:-<root>} $snap"
+  local args=("$@")
+  if [ -n "$max" ]; then
+    if [ "${1:-}" = run ]; then args=(run -m lumo/lumo-max "${@:2}"); else args=(-m lumo/lumo-max "$@"); fi
+  fi
+  local tty=(); [ -t 0 ] && [ -t 1 ] || tty=(-T)
+  log "code project=${project:-<root>} max=${max:-0} args=$*"
+  dc --profile code run --rm ${tty[@]+"${tty[@]}"} -w "/lumo/code/$project" code ${args[@]+"${args[@]}"}
+}
+
+cmd="${1:-}"; [ $# -gt 0 ] && shift
+case "$cmd" in
+  ""|code|--max|-p)
+    max=""; project=""
+    [ "$cmd" = --max ] && max=1
+    [ "$cmd" = -p ] && { project="${1:-}"; shift; }
+    while [ $# -gt 0 ]; do case "$1" in --max) max=1; shift ;; -p) project="$2"; shift 2 ;; *) break ;; esac; done
+    code_session "$project" "$max" "$@" ;;
+  open)
+    [ -n "${1:-}" ] || die "usage: lumo open <project> [--max]"; project="$1"; shift; max=""
+    [ "${1:-}" = --max ] && { max=1; shift; }
+    code_session "$project" "$max" "$@" ;;
+  run)
+    project=""; max=""
+    while [ $# -gt 0 ]; do case "$1" in -p) project="$2"; shift 2 ;; --max) max=1; shift ;; *) break ;; esac; done
+    code_session "$project" "$max" run "$@" ;;
+  code-web)
+    if [ "${1:-}" = stop ]; then dc --profile codeweb stop code-web >/dev/null && dc --profile codeweb rm -f code-web >/dev/null; echo "Coding UI stopped"; exit; fi
+    [ -n "${1:-}" ] && { valid_name "$1"; mkdir -p "$WORKSPACE/code/$1"; }
+    ensure_up
+    LUMO_CODEWEB_PROJECT="${1:-}" dc --profile codeweb up -d --force-recreate code-web >/dev/null || die "couldn't start the coding UI"
+    printf "Starting the coding UI"; for _ in $(seq 1 40); do c="$(curl -s -m 2 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$P_CODE/")"; [ "$c" = 401 ] || [ "$c" = 200 ] && break; printf "."; sleep 2; done; echo
+    echo "Coding UI: http://localhost:$P_CODE  (login: lumo / password in $STACK/secrets/code-web-password)"
+    [ -n "${LUMO_NO_OPEN:-}" ] || open_url "http://localhost:$P_CODE" ;;
+  web)   ensure_up; echo "Chat: http://localhost:$P_WEBUI"; [ -n "${LUMO_NO_OPEN:-}" ] || open_url "http://localhost:$P_WEBUI" ;;
+  home)  ensure_up; echo "Lumo Home: http://localhost:$P_HOME"; [ -n "${LUMO_NO_OPEN:-}" ] || open_url "http://localhost:$P_HOME" ;;
+  ask)   ensure_up; dc exec -T tamer tamer "$*" ;;
+  chat)  ensure_up; dc exec tamer tamer ;;
+  login)
+    ensure_up
+    if [ "${1:-}" != --browser ]; then
+      echo "Sign in with your Proton account (Proton's own secure login; the password isn't stored)."
+      echo "CAPTCHA or a hardware security key? Use: lumo login --browser"
+      dc exec tamer sh -c 'cp -p sessions/vault.enc sessions/vault.enc.bak 2>/dev/null; tamer auth login'
+      if dc exec -T tamer tamer auth status 2>/dev/null | grep -q "configured and valid"; then
+        dc restart tamer >/dev/null; sleep 3
+        if dc exec -T tamer tamer "Reply with exactly: ok" 2>/dev/null | grep -qi ok; then
+          dc exec -T tamer rm -f sessions/vault.enc.bak; echo "Signed in. Lumo is answering."; log "login ok (password)"; exit 0
+        fi
+      fi
+      dc exec -T tamer sh -c 'mv sessions/vault.enc.bak sessions/vault.enc 2>/dev/null'; dc restart tamer >/dev/null
+      die "sign-in didn't work; your previous login (if any) was kept. Try again, or: lumo login --browser"
+    fi
+    echo "Starting the sign-in browser (first time downloads ~3 GB)…"
+    dc --profile login up -d browser >/dev/null || die "couldn't start the sign-in browser"
+    for _ in $(seq 1 60); do curl -sk -m 2 -o /dev/null "https://127.0.0.1:$P_LOGIN/" && break; sleep 2; done
+    echo
+    echo "  1. Open https://localhost:$P_LOGIN  (your browser may warn about its self-signed certificate; that's expected)"
+    echo "  2. Sign in to Proton in the browser you see there (keep that window open)."
+    echo "  3. Come back here and press Enter. (Or press \"I've signed in\" in Lumo Home.)"
+    [ -n "${LUMO_NO_OPEN:-}" ] || open_url "https://localhost:$P_LOGIN"
+    read -r _
+    # The sign-in helper opens Lumo in the sign-in browser, refuses guest mode,
+    # saves the login and restarts lumo-tamer (same as Lumo Home's button).
+    res="$(dc exec -T tamer node -e '
+      const t=require("fs").readFileSync("/run/secrets/helper-token","utf8").trim();
+      fetch("http://127.0.0.1:3010/login",{method:"POST",headers:{"X-Lumo-Token":t}})
+        .then(r=>r.json()).then(j=>{console.log(j.ok?"OK":(j.error||"failed"));process.exit(j.ok?0:1)})
+        .catch(e=>{console.log(String(e));process.exit(1)})' 2>&1)"
+    if [ "$res" = OK ]; then
+      sleep 4
+      if dc exec -T tamer tamer "Reply with exactly: ok" 2>/dev/null | grep -qi ok; then echo "Signed in. Lumo is answering."; log "login ok (browser)"
+      else echo "Login saved, but Lumo didn't answer yet. Check: lumo status" >&2; fi
+    else
+      echo "$res" >&2; echo "Run lumo login --browser again once you've signed in." >&2
+    fi
+    echo "Stopping the sign-in browser and wiping its profile…"
+    dc --profile login rm -sf browser >/dev/null 2>&1
+    proj="$(getenv LUMO_PROJECT)"; docker volume rm "${proj:-lumo}_browser-profile" >/dev/null 2>&1 || true ;;
+  import)
+    [ $# -gt 0 ] || die "usage: lumo import <file|folder>..."
+    for f in "$@"; do [ -e "$f" ] || die "not found: $f"; cp -RL "$f" "$WORKSPACE/inbox/" && echo "imported $(basename "$f") -> inbox (Lumo sees /lumo/inbox)"; done ;;
+  fetch)
+    [ -n "${1:-}" ] || die "usage: lumo fetch <url>"; ensure_up
+    dc exec -T home python3 -c 'import sys; sys.path.insert(0,"/app"); import app
+try:
+    n,b=app.fetch_url(sys.argv[1]); print(f"saved {n} ({b} bytes) -> inbox (Lumo sees /lumo/inbox)")
+except Exception as e:
+    sys.exit(f"lumo: could not fetch: {e}")' "$1" ;;
+  export)
+    dest="${1:-$HOME/Downloads/lumo-out-$(date +%Y%m%d-%H%M%S)}"
+    [ -n "$(ls -A "$WORKSPACE/out")" ] || die "out/ is empty"
+    mkdir -p "$dest" && cp -R "$WORKSPACE/out/." "$dest/" && echo "exported out/ -> $dest" ;;
+  projects) for d in "$WORKSPACE"/code/*/; do [ -d "$d" ] && basename "$d"; done ;;
+  snapshots) [ -n "${1:-}" ] || die "usage: lumo snapshots <project>"; valid_name "$1"
+    jgit "$1" log --format='%h  %cd  %s' --date=format:'%Y-%m-%d %H:%M' -20 ;;
+  restore)
+    [ -n "${2:-}" ] || die "usage: lumo restore <project> <id>"; valid_name "$1"
+    case "$2" in *[!0-9a-fA-F]*) die "snapshot ids are hex (lumo snapshots $1)" ;; esac
+    dc run --rm --no-deps -T --entrypoint sh code -c '
+      cd "/lumo/code/'"$1"'" || exit 1; g="git -c user.name=lumo -c user.email=lumo@localhost"
+      $g rev-parse -q --verify "'"$2"'^{commit}" >/dev/null || { echo "no snapshot '"$2"'" >&2; exit 1; }
+      $g add -A && $g commit -qm "lumo pre-restore $(date "+%Y-%m-%d %H:%M:%S")" --allow-empty
+      pre=$($g rev-parse --short HEAD)
+      $g restore --source="'"$2"'" --staged --worktree -- . && $g clean -fdq && $g commit -qm "lumo restored to '"$2"'" --allow-empty \
+        && echo "restored to '"$2"' (undo: lumo restore '"$1"' $pre)"' ;;
+  up)     ensure_up; echo "Lumo Stack is up. Lumo Home: http://localhost:$P_HOME" ;;
+  down)   dc --profile code --profile codeweb --profile login down; echo "Lumo Stack stopped" ;;
+  status)
+    dc ps --format 'table {{.Service}}\t{{.Status}}\t{{.Ports}}'
+    dc exec -T tamer tamer auth status 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep -E 'expiresIn|valid|attention' | sed 's/^ */  Proton login: /' ;;
+  logs)   dc logs --tail 50 "$@" ;;
+  doctor) exec "$STACK/bin/lumo-doctor" ;;
+  update)
+    echo "Rebuilding with the versions in $ENV_FILE (pulls the base images again)…"
+    dc build --pull && dc up -d && "$STACK/bin/lumo-doctor" ;;
+  -h|--help|help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) die "unknown command '$cmd' (lumo help)" ;;
+esac

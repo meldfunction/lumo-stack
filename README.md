@@ -13,7 +13,7 @@ account, nothing phoning home.
 > could put your Proton account at risk. Not affiliated with or endorsed by Proton.
 > Rebellious, yes. Reckless, no.
 
-**Platforms:** macOS today. Windows and Linux land in v0.2 (Docker Compose, same stack everywhere).
+**Platforms:** macOS, Windows and Linux. All you need is Docker and a browser.
 
 ---
 
@@ -150,73 +150,84 @@ New to Lumo? [Try it](https://lumo.proton.me) ·
 [Getting started](https://proton.me/support/lumo-getting-started) ·
 [What's new in Lumo 2.0](https://proton.me/blog/lumo-2)
 
-### Then, your Mac
+### Then, Docker and a browser
 
-- [OrbStack](https://orbstack.dev) (recommended) or Docker Desktop
-- Node.js 20+, Python 3.10+ and git
-- Chrome, Brave or Edge, for the Proton sign-in
-- Optional: Claude Code (the installer can fetch it for you)
+That's it. Everything else runs in containers.
 
-```sh
-brew install git node python
-brew install --cask orbstack
-```
+| | You need |
+|---|---|
+| **macOS** | [OrbStack](https://orbstack.dev) (recommended) or Docker Desktop |
+| **Windows 10/11** | [Docker Desktop](https://www.docker.com/products/docker-desktop/) (WSL 2 backend) |
+| **Linux** | Docker Engine + the Compose plugin |
+| All | Any modern browser. Optional: [Claude Code](https://claude.com/claude-code) (the installer can fetch it) |
 
-### Click your way through
-
-1. [Download the zip](https://github.com/meldfunction/lumo-stack/archive/refs/heads/main.zip) and unzip it.
-2. Double-click **Install Lumo.command**. First time, macOS gets suspicious: right-click it and choose Open.
-3. Pick a home for Lumo's files (or keep `~/lumo`), and say yes or no to Claude Code.
-4. Sign in to Proton in the browser window that pops up. It closes itself when you're done.
-5. Lumo Home opens. You're in.
-
-### Or the terminal way
+### Install: macOS and Linux
 
 ```sh
 git clone https://github.com/meldfunction/lumo-stack.git ~/lumo-stack
-cd ~/lumo-stack && ./install
+cd ~/lumo-stack && ./install.sh
 ```
 
-Commitment issues? `./install --dry-run` shows every step and changes nothing.
 Options: `--workspace DIR`, `--with-claude`, `--no-login`, `--yes`.
 
-The first install pulls a few GB (Open WebUI, LiteLLM, OpenCode) and takes 10–20
-minutes. Make a coffee. It finishes with the Proton sign-in and a `lumo doctor`
-run. Re-running is safe: your keys, settings and login stay put.
+### Install: Windows (PowerShell)
 
-**Changed your mind?** `./uninstall` removes it all and keeps your files;
-`./uninstall --purge` takes those too.
+```powershell
+git clone https://github.com/meldfunction/lumo-stack.git $HOME\lumo-stack
+cd $HOME\lumo-stack; powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+No git? [Download the zip](https://github.com/meldfunction/lumo-stack/archive/refs/heads/main.zip),
+unzip it, and run `install.ps1` from that folder. Options: `-Workspace D:\lumo`,
+`-WithClaude`, `-NoLogin`, `-Yes`.
+
+The first install builds and pulls a few GB and takes 10–20 minutes. Make a
+coffee. Re-running is safe: your keys, settings and login stay put.
+
+### Signing in to Proton (any OS)
+
+`lumo login` starts a sign-in browser in Docker. You use it from your own browser:
+
+1. Open **https://localhost:3001** (the installer opens it for you). Your browser
+   will warn about a self-signed certificate; that's expected for a local container.
+2. Sign in to Lumo in the browser you see there.
+3. Press Enter in the terminal, or **I've signed in** in Lumo Home.
+
+Lumo Stack saves the login (encrypted, in a Docker volume), checks Lumo answers,
+then stops the sign-in browser and wipes its profile. The login renews itself;
+Lumo Home tells you if Proton ever signs you out.
+
+**Done with it?** `lumo down` stops everything. Remove the containers, images and
+volumes with `docker compose down --rmi local -v` from the install folder; your
+workspace folder stays.
 
 ## Under the hood
 
 ```
-lumo / lumo code-web ─► OpenCode (jail) ─► lumo-relay ─┐
-lumo web ─────────────► Open WebUI ────────────────────┼─► LiteLLM :4000 ─► lumo-tamer :3003 ─► Proton Lumo
-claude-lumo ──────────► Claude Code ───────────────────┘
-lumo home ────────────► Lumo Home :8090 (status, sign-in, files)
+lumo / lumo code-web ─► OpenCode (jail network) ─┐
+lumo web ─────────────► Open WebUI ──────────────┼─► LiteLLM ─► lumo-tamer ─► Proton Lumo
+claude-lumo ──────────► Claude Code ─────────────┘
+lumo home ────────────► Lumo Home (status, sign-in, files)
+lumo login ───────────► sign-in browser (only while you sign in)
 ```
 
-LiteLLM routes only to lumo-tamer, and every launcher checks that before it
-starts. lumo-tamer and LiteLLM run as LaunchAgents; an hourly check pings you if
-the Proton login stops working. Everything listens on `127.0.0.1`.
+One `compose.yaml` runs it all. LiteLLM routes only to lumo-tamer, and every
+launcher checks that before it starts. lumo-tamer isn't published at all;
+LiteLLM, Open WebUI, Lumo Home and the coding UI publish on `127.0.0.1` only.
+The coding agent sits on an internal network whose only other member is LiteLLM.
 
 ### Settings
 
-Defaults live in `lib.zsh`. To change them on one machine, drop a `lumo.env` next
-to it (it's git-ignored):
-
-```sh
-LUMO_HOME=$HOME/Documents/Lumo   # workspace (macOS will ask apps for access to Documents)
-```
-
-Pinned versions live in `versions.env`; `lumo update` changes them.
+`.env` in the install folder (git-ignored) holds this machine's settings:
+workspace path, ports, the router key and pinned versions. Change a version,
+then run `lumo update`. Keys live in `secrets/`.
 
 ## What to expect
 
 - **Tool calling is experimental.** Quick edits and file writes work; long multi-step sessions trip over themselves more than with Claude or GPT.
 - **Some Lumo perks stay home.** Lumo's web search, image generation and memory don't make it through the bridge.
-- **Your login babysits itself.** It lasts 24 hours and renews on its own; if Proton signs you out, Lumo Home and a notification tell you.
-- **macOS only in v0.1.** Windows and Linux are next.
+- **Your login babysits itself.** It lasts 24 hours and renews on its own; if Proton signs you out, Lumo Home tells you.
+- **New in v0.2.** The Compose version is tested on macOS; Windows and Linux are built for but not yet tested on real machines. Reports welcome.
 
 ---
 

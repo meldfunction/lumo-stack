@@ -10,3 +10,9 @@ vendor/
 litellm/
 # macOS
 .DS_Store
+# v0.2: machine settings, keys and generated configs
+.env
+secrets/
+logs/
+config/tamer.yaml
+config/litellm.yaml

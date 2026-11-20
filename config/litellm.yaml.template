@@ -1,0 +1,23 @@
+# LiteLLM for the Lumo stack: routes only to lumo-tamer (inside Docker).
+model_list:
+  - model_name: lumo
+    litellm_params:
+      model: openai/lumo
+      api_base: http://tamer:3003/v1
+      api_key: "{{TAMER_KEY}}"
+  - model_name: lumo-max
+    litellm_params:
+      model: openai/lumo-max
+      api_base: http://tamer:3003/v1
+      api_key: "{{TAMER_KEY}}"
+  - model_name: lumo-lite
+    litellm_params:
+      model: openai/lumo-lite
+      api_base: http://tamer:3003/v1
+      api_key: "{{TAMER_KEY}}"
+
+litellm_settings:
+  drop_params: true
+
+general_settings:
+  master_key: "{{LITELLM_KEY}}"

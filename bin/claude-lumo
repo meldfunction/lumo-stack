@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Claude Code with Lumo as the ONLY model (macOS/Linux). Windows: claude-lumo.ps1.
+#   Claude Code -> LiteLLM (127.0.0.1) -> lumo-tamer -> Lumo. No Anthropic account.
+# Refuses to start if LiteLLM could route anywhere but Lumo. Not jailed: runs on
+# this machine with Claude Code's own permission prompts.
+set -u
+STACK="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$0")")/.." && pwd)"
+die() { echo "claude-lumo: $*" >&2; exit 1; }
+getenv() { sed -n "s/^$1=//p" "$STACK/.env" | tail -1; }
+command -v claude >/dev/null || die "Claude Code isn't installed (curl -fsSL https://claude.ai/install.sh | bash)"
+[ -r "$STACK/.env" ] || die "Lumo Stack isn't installed yet"
+cfg="$(grep -vE '^\s*#' "$STACK/config/litellm.yaml")"
+bases="$(echo "$cfg" | grep -E '^\s*api_base:' | sed 's/^ *//' | sort -u)"
+[ "$bases" = "api_base: http://tamer:3003/v1" ] || die "LiteLLM routes somewhere other than lumo-tamer"
+echo "$cfg" | grep -E '^\s*model:' | grep -qvE 'model: openai/lumo(-max|-lite)?$' && die "LiteLLM config has a non-Lumo model"
+echo "$cfg" | grep -qiE 'anthropic|claude' && die "LiteLLM config mentions anthropic/claude"
+"$STACK/bin/lumo" up >/dev/null || die "stack didn't come up"
+
+unset ANTHROPIC_API_KEY CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX
+port="$(getenv LUMO_LITELLM_PORT)"
+export ANTHROPIC_BASE_URL="http://localhost:${port:-4000}"
+export ANTHROPIC_AUTH_TOKEN="$(getenv LITELLM_MASTER_KEY)"
+[ -n "$ANTHROPIC_AUTH_TOKEN" ] || die "no LITELLM_MASTER_KEY in .env"
+export ANTHROPIC_MODEL=lumo ANTHROPIC_DEFAULT_OPUS_MODEL=lumo-max ANTHROPIC_DEFAULT_SONNET_MODEL=lumo
+export ANTHROPIC_DEFAULT_HAIKU_MODEL=lumo-lite ANTHROPIC_SMALL_FAST_MODEL=lumo-lite CLAUDE_CODE_SUBAGENT_MODEL=lumo
+[ -n "${LUMO_CONTEXT_TOKENS:-}" ] && export CLAUDE_CODE_MAX_CONTEXT_TOKENS="$LUMO_CONTEXT_TOKENS"
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 DISABLE_AUTOUPDATER=1 DISABLE_TELEMETRY=1 DISABLE_ERROR_REPORTING=1
+mcp=(--strict-mcp-config); [ "${LUMO_KEEP_MCP:-}" = 1 ] && mcp=()
+mkdir -p "$STACK/logs"; echo "$(date '+%Y-%m-%d %H:%M:%S') claude-lumo start cwd=$PWD" >> "$STACK/logs/lumo.log"
+exec claude ${mcp[@]+"${mcp[@]}"} "$@"

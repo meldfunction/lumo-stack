@@ -1,0 +1,169 @@
+# Lumo Stack v0.2: the whole stack in Docker Compose (macOS, Windows, Linux).
+# Settings and keys come from .env and ./secrets/, written by install.sh / install.ps1.
+#
+#   docker compose up -d                      core: tamer, litellm, webui, home
+#   docker compose --profile login up -d      + the sign-in browser (https://localhost:3001)
+#   docker compose run --rm code              coding agent (jailed), via the lumo CLI
+#   docker compose --profile codeweb up -d    coding agent in the browser
+#
+# Every published port binds to 127.0.0.1 only.
+name: ${LUMO_PROJECT:-lumo}
+
+x-jail: &jail
+  # The coding agent's jail: read-only system, no capabilities, no privilege
+  # escalation, limits, and only the internal network (its one road is LiteLLM).
+  image: lumo-opencode:${OPENCODE_VERSION:-1.19.5}
+  build:
+    context: ./docker
+    dockerfile: opencode.Dockerfile
+  read_only: true
+  tmpfs:
+    - /tmp:rw,exec,nosuid,size=512m
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 512
+  mem_limit: 4g
+  cpus: 4
+  user: node
+  environment:
+    LITELLM_KEY: ${LITELLM_MASTER_KEY:?run the installer first}
+  volumes:
+    - opencode-home:/home/node
+    - ./config/opencode.json:/home/node/.config/opencode/opencode.json:ro
+    - ${LUMO_WORKSPACE:?run the installer first}/code:/lumo/code
+    - ${LUMO_WORKSPACE}/inbox:/lumo/inbox:ro
+    - ${LUMO_WORKSPACE}/out:/lumo/out
+  working_dir: /lumo/code
+
+services:
+  tamer:
+    image: lumo-tamer:${TAMER_COMMIT:-0ef587b}
+    build:
+      context: ./docker
+      dockerfile: tamer.Dockerfile
+      args: { TAMER_COMMIT: "${TAMER_COMMIT:-0ef587b}" }
+    restart: unless-stopped
+    volumes:
+      - ./config/tamer.yaml:/app/config.yaml
+      - tamer-sessions:/app/sessions
+    secrets: [lumo-vault-key, helper-token]
+    networks: [core]
+    # No published port: only LiteLLM and Lumo Home talk to it.
+
+  litellm:
+    image: lumo-litellm:${LITELLM_VERSION:-1.110.2}
+    build:
+      context: ./docker
+      dockerfile: litellm.Dockerfile
+      args: { LITELLM_VERSION: "${LITELLM_VERSION:-1.110.2}" }
+    restart: unless-stopped
+    volumes:
+      - ./config/litellm.yaml:/config/config.yaml:ro
+    ports:
+      - "127.0.0.1:${LUMO_LITELLM_PORT:-4000}:4000"   # for claude-lumo and your own tools
+    networks:
+      core: {}
+      jail: { aliases: [lumo-relay] }                  # the jail's only way out
+    depends_on: [tamer]
+
+  webui:
+    image: ${WEBUI_IMAGE:-ghcr.io/open-webui/open-webui:main}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${LUMO_WEBUI_PORT:-8080}:8080"
+    volumes:
+      - webui-data:/app/backend/data
+    environment:
+      OPENAI_API_BASE_URL: http://litellm:4000/v1
+      OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
+      ENABLE_OLLAMA_API: "False"
+      ENABLE_TITLE_GENERATION: "False"
+      ENABLE_TAGS_GENERATION: "False"
+      ENABLE_FOLLOW_UP_GENERATION: "False"
+      ENABLE_AUTOCOMPLETE_GENERATION: "False"
+      ENABLE_EVALUATION_ARENA_MODELS: "False"
+      ANONYMIZED_TELEMETRY: "False"
+      SCARF_NO_ANALYTICS: "true"
+      DO_NOT_TRACK: "true"
+    networks: [core]
+    depends_on: [litellm]
+
+  home:
+    image: lumo-home:${LUMO_VERSION:-0.2.0}
+    build:
+      context: ./home
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    ports:
+      - "127.0.0.1:${LUMO_HOME_PORT:-8090}:8090"
+    environment:
+      LUMO_PUBLIC_PORTS: "${LUMO_WEBUI_PORT:-8080},${LUMO_CODEWEB_PORT:-4096},${LUMO_HOME_PORT:-8090},${LUMO_LOGIN_PORT:-3001}"
+    volumes:
+      - ${LUMO_WORKSPACE}/code:/lumo/code:ro
+      - ${LUMO_WORKSPACE}/inbox:/lumo/inbox
+      - ${LUMO_WORKSPACE}/out:/lumo/out
+    secrets: [helper-token]
+    networks: [core, codeweb]
+
+  # --- On demand -------------------------------------------------------------
+
+  browser:
+    # Sign-in browser. Open https://localhost:3001, sign in to Lumo, then run
+    # `lumo login` (or press the button in Lumo Home). Stopped again afterwards.
+    profiles: [login]
+    image: lumo-browser:075b0b99-ls64
+    build:
+      context: ./docker
+      dockerfile: browser.Dockerfile
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Etc/UTC
+      CHROME_CLI: https://account.proton.me/login --remote-debugging-address=0.0.0.0 --remote-debugging-port=9221 --remote-debugging-allowed-origins=* --disable-dev-shm-usage
+    volumes:
+      - browser-profile:/config
+    ports:
+      - "127.0.0.1:${LUMO_LOGIN_PORT:-3001}:3001"     # the browser's screen, in your browser
+    shm_size: 2gb
+    security_opt: [seccomp:unconfined]
+    networks: [core]                                  # its debugging port stays inside Docker
+
+  code:
+    <<: *jail
+    profiles: [code]
+    stdin_open: true
+    tty: true
+    networks: [jail]
+
+  code-web:
+    <<: *jail
+    profiles: [codeweb]
+    restart: unless-stopped
+    entrypoint: ["sh", "-c", "OPENCODE_SERVER_USERNAME=lumo OPENCODE_SERVER_PASSWORD=$$(cat /run/secrets/code-web-password) exec opencode web --hostname 0.0.0.0 --port 4096"]
+    secrets: [code-web-password]
+    working_dir: /lumo/code/${LUMO_CODEWEB_PROJECT:-}
+    ports:
+      - "127.0.0.1:${LUMO_CODEWEB_PORT:-4096}:4096"
+    networks: [jail, codeweb]
+
+networks:
+  core: {}
+  jail:
+    internal: true                      # no route to the internet
+  codeweb:
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"   # port publishing only, no outbound
+
+volumes:
+  tamer-sessions: {}
+  webui-data: {}
+  opencode-home: {}
+  browser-profile: {}
+
+secrets:
+  lumo-vault-key:    { file: ./secrets/lumo-vault-key }
+  helper-token:      { file: ./secrets/helper-token }
+  code-web-password: { file: ./secrets/code-web-password }

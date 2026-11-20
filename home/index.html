@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lumo Home</title>
+<style>
+  :root { --bg:#f6f3ee; --card:#fffdf9; --ink:#17151a; --muted:#5e5864; --line:#e2dbd2;
+          --hot:#d6246e; --hot-ink:#fff; --hot-soft:#fbe3ec; --ok:#1f845a; --bad:#c9372c; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#141217; --card:#1c1a20; --ink:#f1ecef; --muted:#a79fab; --line:#322d36;
+            --hot:#ff5c97; --hot-ink:#1a0b12; --hot-soft:#3a1a28; --ok:#4bce97; --bad:#f87168; color-scheme: dark; } }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif }
+  main { max-width:900px; margin:0 auto; padding:28px 16px 48px }
+  h1 { font-size:26px; margin:0; letter-spacing:-.01em } .sub { color:var(--muted); margin:2px 0 22px }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:14px }
+  .card { background:var(--card); border:1.5px solid var(--line); border-radius:12px; padding:16px; min-width:0 }
+  .card h2 { font-size:16px; margin:0 0 6px } .card p { margin:0 0 12px; color:var(--muted); font-size:14px }
+  .wide { grid-column:1/-1 }
+  button, .btn { display:inline-block; padding:9px 14px; border:0; border-radius:8px; background:var(--hot); color:var(--hot-ink);
+    font:inherit; font-weight:600; cursor:pointer; text-decoration:none }
+  button.ghost, .btn.ghost { background:transparent; color:var(--ink); border:1.5px solid var(--line) }
+  button:disabled { opacity:.55; cursor:default }
+  input { padding:8px 10px; border:1.5px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); font:inherit; min-width:0 }
+  code { font:13px ui-monospace,Menlo,Consolas,monospace; background:var(--hot-soft); padding:1px 5px; border-radius:4px }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center }
+  .msg { font-size:13px; margin-top:10px; color:var(--muted); min-height:1.2em } .msg.ok { color:var(--ok) } .msg.bad { color:var(--bad) }
+  .pill { font-size:12px; font-weight:700; padding:2px 8px; border-radius:20px; background:var(--line) }
+  .pill.ok { background:color-mix(in srgb, var(--ok) 18%, transparent); color:var(--ok) }
+  .pill.bad { background:color-mix(in srgb, var(--bad) 18%, transparent); color:var(--bad) }
+  ol.steps { margin:0 0 12px; padding-left:20px; font-size:14px } ol.steps li { margin:4px 0 }
+  ul.list { list-style:none; margin:8px 0 0; padding:0; font-size:14px }
+  ul.list li { display:flex; gap:10px; align-items:center; padding:6px 0; border-top:1px solid var(--line) }
+  ul.list li:first-child { border-top:0 }
+  ul.list .n { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  ul.list small { color:var(--muted) } ul.list .empty { color:var(--muted) }
+  ul.list a, ul.list button.link { color:var(--hot); background:none; border:0; padding:0; font:inherit; cursor:pointer; text-decoration:none }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--bad); flex:none } .dot.up { background:var(--ok) }
+  .files { display:grid; grid-template-columns:1fr 1fr; gap:20px } @media (max-width:640px) { .files { grid-template-columns:1fr } }
+  h3 { font-size:14px; margin:0 0 8px } h3 small { color:var(--muted); font-weight:400 }
+  .drop { border:2px dashed var(--line); border-radius:10px; padding:16px; text-align:center; color:var(--muted); cursor:pointer }
+  .drop.over { border-color:var(--hot); color:var(--ink) }
+  :focus-visible { outline:2px solid var(--hot); outline-offset:2px }
+</style></head><body><main>
+<h1>Lumo Home</h1>
+<p class="sub">Proton Lumo on this machine. Your prompts are nobody's training data.</p>
+<div class="grid">
+  <section class="card">
+    <h2>Proton sign-in <span id="pill" class="pill">checking</span></h2>
+    <p id="loginText">Checking…</p>
+    <form id="pwForm" hidden autocomplete="on">
+      <input id="pwUser" type="email" autocomplete="username" placeholder="Proton email" required style="width:100%;margin-bottom:8px">
+      <input id="pwPass" type="password" autocomplete="current-password" placeholder="Password" required style="width:100%;margin-bottom:8px">
+      <input id="pwTotp" inputmode="numeric" autocomplete="one-time-code" placeholder="2FA code (if you use one)" style="width:100%;margin-bottom:10px">
+      <button id="pwBtn">Sign in with Proton</button>
+      <div id="hvBox" hidden style="margin-top:12px;padding:12px;border:1.5px dashed var(--hot);border-radius:10px">
+        <strong>Proton wants to check you're human.</strong>
+        <ol class="steps" style="margin-top:8px">
+          <li><a id="hvLink" class="btn ghost" target="_blank" rel="noopener">Open the CAPTCHA</a> (opens Proton's verification page in a new tab)</li>
+          <li>Solve it, then come back here.</li>
+          <li><input id="hvTotp" inputmode="numeric" autocomplete="one-time-code" placeholder="Fresh 2FA code (if you use one)" style="width:100%;margin:4px 0 8px"><br>
+              <button id="hvBtn" type="button">Continue</button></li>
+        </ol>
+      </div>
+      <p style="margin:10px 0 0"><small>Uses Proton's own secure login. Your password is used once for the handshake and never stored. CAPTCHA or a hardware security key? Use the sign-in browser: <code>lumo login --browser</code>.</small></p>
+    </form>
+    <div id="signin" hidden>
+      <ol class="steps">
+        <li><a id="browserLink" class="btn ghost" target="_blank" rel="noopener">Open the sign-in browser</a><br><small>It's a real Chromium running in Docker. Your browser may warn about its self-signed certificate; that's expected.</small></li>
+        <li>Sign in to Lumo there.</li>
+        <li><button id="doneBtn">I've signed in</button></li>
+      </ol>
+    </div>
+    <p id="needCli" hidden>To sign in, run <code>lumo login</code> in a terminal. It opens a sign-in browser and this card walks you through the rest.</p>
+    <div id="loginMsg" class="msg"></div>
+  </section>
+  <section class="card">
+    <h2>Chat</h2>
+    <p>Talk to Lumo in Open WebUI. No tools, no file access.</p>
+    <a id="chatLink" class="btn" target="_blank" rel="noopener">Open Chat</a>
+  </section>
+  <section class="card">
+    <h2>Code</h2>
+    <p>The jailed coding agent in your browser: only sees your workspace, no internet.</p>
+    <a id="codeLink" class="btn" target="_blank" rel="noopener" hidden>Open Code</a>
+    <p id="codeOff">Not running. Start it with <code>lumo code-web</code>.</p>
+    <p style="margin:8px 0 0"><small>Login <code>lumo</code>; the password was shown at install (also in <code>secrets/code-web-password</code>).</small></p>
+  </section>
+  <section class="card wide">
+    <h2>Files</h2>
+    <div class="files">
+      <div>
+        <h3>Into the jail <small>inbox · read-only for Lumo</small></h3>
+        <div id="drop" class="drop" tabindex="0">Drop files here or <u>choose files</u></div>
+        <input id="pick" type="file" multiple hidden>
+        <form id="fetchForm" class="row" style="margin-top:8px">
+          <input id="url" type="url" placeholder="https://… a document to download into the inbox" style="flex:1">
+          <button>Fetch</button></form>
+        <div id="inMsg" class="msg"></div>
+        <ul id="inbox" class="list"></ul>
+      </div>
+      <div>
+        <h3>Out of the jail <small>out · and projects</small></h3>
+        <ul id="out" class="list"></ul>
+        <h3 style="margin-top:14px">Projects <small>download as .zip</small></h3>
+        <ul id="projList" class="list"></ul>
+      </div>
+    </div>
+  </section>
+  <section class="card wide">
+    <h2>Services</h2>
+    <ul id="svc" class="list"></ul>
+    <p style="margin-top:10px"><small>Start or stop things with <code>lumo up</code>, <code>lumo down</code> and <code>lumo status</code>. Run <code>lumo doctor</code> for the full security check.</small></p>
+  </section>
+</div>
+</main>
+<script>
+(function () {
+  var TOKEN = "__TOKEN__", $ = function (id) { return document.getElementById(id); };
+  var host = location.hostname;
+  function post(path, body) {
+    return fetch(path, { method: 'POST', headers: { 'X-Lumo-Token': TOKEN, 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) })
+      .then(function (r) { return r.json(); }).catch(function () { return { error: 'Lumo Home isn’t answering.' }; });
+  }
+  function msg(el, t, cls) { el.textContent = t || ''; el.className = 'msg' + (cls ? ' ' + cls : ''); }
+  function li(parts) { var l = document.createElement('li'); parts.forEach(function (p) { l.append(p); }); return l; }
+  function span(cls, t) { var s = document.createElement('span'); s.className = cls; s.textContent = t; return s; }
+  function small(t) { var s = document.createElement('small'); s.textContent = t; return s; }
+  function link(t, href) { var a = document.createElement('a'); a.textContent = t; a.href = href; return a; }
+  function fill(ul, items, empty) { ul.textContent = ''; if (!items.length) ul.append(li([span('empty', empty)])); else items.forEach(function (i) { ul.append(i); }); }
+
+  var lastProjects = null;
+  function render(s) {
+    var up = {}; s.services.forEach(function (x) { up[x.name] = x.up; });
+    fill($('svc'), s.services.map(function (x) { var d = document.createElement('span'); d.className = 'dot' + (x.up ? ' up' : '');
+      var n = document.createElement('strong'); n.textContent = x.name; return li([d, n, small(x.detail + (x.up ? '' : ' (off)'))]); }), '');
+    var L = s.login, p = $('pill');
+    p.textContent = L.valid ? 'signed in' : 'signed out'; p.className = 'pill ' + (L.valid ? 'ok' : 'bad');
+    $('loginText').textContent = L.valid ? 'Signed in' + (L.expires ? '; renews itself (' + L.expires + ' left).' : '.')
+      : (L.error ? L.error : 'Lumo needs you to sign in to Proton.');
+    $('signin').hidden = !up['Sign-in browser']; $('needCli').hidden = true;
+    $('pwForm').hidden = !!up['Sign-in browser'] || (L.valid && !reauth);
+    $('loginText').hidden = !$('pwForm').hidden && !L.valid;
+    $('browserLink').href = 'https://' + host + ':' + s.ports.login + '/';
+    $('chatLink').href = 'http://' + host + ':' + s.ports.webui + '/';
+    $('codeLink').href = 'http://' + host + ':' + s.ports.codeweb + '/';
+    $('codeLink').hidden = !up['Code']; $('codeOff').hidden = !!up['Code'];
+    if (JSON.stringify(s.projects) !== JSON.stringify(lastProjects)) { lastProjects = s.projects; files(); }
+  }
+  function refresh() { fetch('/api/status').then(function (r) { return r.json(); }).then(render).catch(function () {}); }
+
+  var reauth = false;
+  $('pill').onclick = function () { reauth = !reauth; refresh(); };
+  $('pill').title = 'Click to sign in again';
+  $('pill').style.cursor = 'pointer';
+  $('pwForm').onsubmit = function (e) {
+    e.preventDefault(); $('pwBtn').disabled = true; msg($('loginMsg'), 'Signing in to Proton…');
+    post('/api/login-password', { username: $('pwUser').value.trim(), password: $('pwPass').value, totp: $('pwTotp').value.trim() })
+      .then(loginResult);
+  };
+  function loginResult(r) {
+    $('pwBtn').disabled = false; $('hvBtn').disabled = false; $('pwPass').value = ''; $('pwTotp').value = ''; $('hvTotp').value = '';
+    $('hvBox').hidden = !r.captcha;
+    if (r.captcha) { $('hvLink').href = r.captcha; msg($('loginMsg'), 'Almost there: one CAPTCHA to go.'); }
+    else if (r.ok) { reauth = false; msg($('loginMsg'), 'Signed in. Lumo is ready.', 'ok'); }
+    else msg($('loginMsg'), r.error || 'That didn\u2019t work. Try again.', 'bad');
+    refresh();
+  }
+  $('hvBtn').onclick = function () {
+    $('hvBtn').disabled = true; msg($('loginMsg'), 'Finishing sign-in…');
+    post('/api/login-continue', { totp: $('hvTotp').value.trim() }).then(loginResult);
+  };
+  $('doneBtn').onclick = function () {
+    $('doneBtn').disabled = true; msg($('loginMsg'), 'Saving your login…');
+    post('/api/login').then(function (r) {
+      $('doneBtn').disabled = false;
+      msg($('loginMsg'), r.ok ? 'Signed in. You can close the sign-in browser; lumo login stops it for you.' : (r.error || 'That didn’t work. Make sure you finished signing in, then try again.'), r.ok ? 'ok' : 'bad');
+      refresh();
+    });
+  };
+
+  // Files
+  function size(n) { return n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(1) + ' MB'; }
+  function dl(q) { return '/api/download?t=' + encodeURIComponent(TOKEN) + '&' + q; }
+  function del(area, path) { var b = document.createElement('button'); b.className = 'link'; b.textContent = 'Delete';
+    b.onclick = function () { if (b.textContent === 'Sure?') post('/api/delete', { area: area, path: path }).then(files); else { b.textContent = 'Sure?'; setTimeout(function () { b.textContent = 'Delete'; }, 3000); } }; return b; }
+  function files() {
+    fetch('/api/files').then(function (r) { return r.json(); }).then(function (f) {
+      fill($('inbox'), f.inbox.map(function (x) { return li([span('n', x.path), small(size(x.size)), del('inbox', x.path)]); }), 'Empty');
+      fill($('out'), f.out.map(function (x) { return li([span('n', x.path), small(size(x.size)), link('Download', dl('area=out&path=' + encodeURIComponent(x.path))), del('out', x.path)]); }), 'Nothing yet');
+    });
+    fill($('projList'), (lastProjects || []).map(function (p) { return li([span('n', p), link('Download .zip', dl('area=project&name=' + encodeURIComponent(p)))]); }), 'No projects yet');
+  }
+  function upload(list) {
+    var n = list.length, done = 0, failed = 0; if (!n) return;
+    msg($('inMsg'), 'Uploading ' + n + ' file' + (n > 1 ? 's' : '') + '…');
+    Array.prototype.forEach.call(list, function (f) {
+      fetch('/api/upload', { method: 'POST', headers: { 'X-Lumo-Token': TOKEN, 'X-Filename': encodeURIComponent(f.name), 'Content-Type': 'application/octet-stream' }, body: f })
+        .then(function (r) { if (!r.ok) failed++; }).catch(function () { failed++; })
+        .then(function () { if (++done === n) { msg($('inMsg'), failed ? failed + ' failed (max 200 MB each).' : 'In the inbox.', failed ? 'bad' : 'ok'); files(); } });
+    });
+  }
+  var drop = $('drop');
+  drop.onclick = function () { $('pick').click(); };
+  drop.onkeydown = function (e) { if (e.key === 'Enter' || e.key === ' ') $('pick').click(); };
+  $('pick').onchange = function () { upload($('pick').files); $('pick').value = ''; };
+  ['dragenter', 'dragover'].forEach(function (t) { drop.addEventListener(t, function (e) { e.preventDefault(); drop.classList.add('over'); }); });
+  ['dragleave', 'drop'].forEach(function (t) { drop.addEventListener(t, function (e) { e.preventDefault(); drop.classList.remove('over'); }); });
+  drop.addEventListener('drop', function (e) { upload(e.dataTransfer.files); });
+  $('fetchForm').onsubmit = function (e) {
+    e.preventDefault(); var u = $('url').value.trim(); if (!u) return;
+    msg($('inMsg'), 'Downloading…');
+    post('/api/fetch', { url: u }).then(function (r) {
+      if (r.error) msg($('inMsg'), r.error, 'bad'); else { msg($('inMsg'), 'Saved ' + r.name + ' (' + size(r.size) + ') to the inbox.', 'ok'); $('url').value = ''; }
+      files();
+    });
+  };
+  refresh(); setInterval(refresh, 4000); setInterval(files, 10000);
+})();
+</script></body></html>

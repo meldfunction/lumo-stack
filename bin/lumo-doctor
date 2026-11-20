@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Health and security check for Lumo Stack v0.2 (macOS/Linux).
+set -u
+STACK="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$0")")/.." && pwd)"
+getenv() { sed -n "s/^$1=//p" "$STACK/.env" | tail -1; }
+dc() { docker compose --project-directory "$STACK" -f "$STACK/compose.yaml" "$@"; }
+pass=0; fail=0
+ok()  { echo "  ✓ $1"; pass=$((pass+1)); }
+bad() { echo "  ✗ $1${2:+  →  $2}"; fail=$((fail+1)); }
+chk() { if eval "$2" >/dev/null 2>&1; then ok "$1"; else bad "$1" "${3:-}"; fi; }
+W="$(getenv LUMO_WEBUI_PORT)"; H="$(getenv LUMO_HOME_PORT)"; L="$(getenv LUMO_LITELLM_PORT)"
+
+echo "Services"
+chk "Docker running" "docker info" "start Docker"
+for s in tamer litellm webui home; do
+  chk "$s running" "[ \"\$(dc ps -q $s)\" ] && [ \"\$(docker inspect -f '{{.State.Running}}' \$(dc ps -q $s))\" = true ]" "lumo up; lumo logs $s"
+done
+chk "LiteLLM on 127.0.0.1:${L:-4000}" "curl -s -m 3 -o /dev/null http://127.0.0.1:${L:-4000}/health/liveliness"
+chk "Open WebUI on 127.0.0.1:${W:-8080}" "curl -s -m 3 http://127.0.0.1:${W:-8080}/health | grep -q true"
+chk "Lumo Home on 127.0.0.1:${H:-8090}" "curl -s -m 3 -o /dev/null http://127.0.0.1:${H:-8090}/"
+
+echo; echo "Proton login"
+st="$(dc exec -T tamer tamer auth status 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"
+echo "$st" | grep -q "configured and valid" && ok "signed in" || bad "not signed in" "lumo login"
+r="$(dc exec -T tamer tamer "Reply with exactly: ok" 2>/dev/null)"
+echo "$r" | grep -qi ok && ok "Lumo answers a test message" || bad "Lumo didn't answer" "lumo login, or check your network"
+
+echo; echo "Routing (Lumo only)"
+cfg="$(grep -vE '^\s*#' "$STACK/config/litellm.yaml")"
+[ "$(echo "$cfg" | grep -E '^\s*api_base:' | sed 's/^ *//' | sort -u)" = "api_base: http://tamer:3003/v1" ] \
+  && ok "LiteLLM routes only to lumo-tamer" || bad "LiteLLM routes somewhere else" "config/litellm.yaml"
+echo "$cfg" | grep -qiE 'anthropic|claude' && bad "LiteLLM config mentions anthropic/claude" || ok "no Anthropic routes in LiteLLM"
+grep -q '"baseURL": "http://lumo-relay:4000/v1"' "$STACK/config/opencode.json" && ok "coding agent routes only to LiteLLM" || bad "opencode.json changed"
+pub="$(docker ps --filter "label=com.docker.compose.project=$(getenv LUMO_PROJECT)" --format '{{.Ports}}' | tr ',' '\n' | grep -- '->' | grep -v '127.0.0.1:' || true)"
+[ -z "$pub" ] && ok "every published port is localhost-only" || bad "ports open beyond localhost" "$pub"
+[ -z "$(docker port "$(dc ps -q tamer)" 2>/dev/null)" ] && ok "lumo-tamer not published at all" || bad "lumo-tamer is published"
+
+echo; echo "Coding jail"
+proj="$(getenv LUMO_PROJECT)"; proj="${proj:-lumo}"
+[ "$(docker network inspect -f '{{.Internal}}' "${proj}_jail" 2>/dev/null)" = true ] && ok "jail network is internal (no internet route)" || bad "jail network missing or not internal"
+probe="$(dc --profile code run --rm --no-deps -T --entrypoint sh code -c '
+  w(){ sh -c "echo x > $1" 2>/dev/null && { echo "W $1"; rm -f "$1"; } || echo "B $1"; }
+  w /etc/lumo-probe; w /usr/bin/lumo-probe; w /lumo-probe; w /lumo/inbox/lumo-probe; w /home/node/.config/opencode/opencode.json; w /lumo/out/.lumo-probe
+  [ -e /Users ] || [ -e /home/node/../../root/.ssh ] && echo "W host-visible" || echo "B host-visible"
+  [ "$(id -u)" = 0 ] && echo "W root" || echo "B root"
+  node -e "fetch(\"https://example.com\",{signal:AbortSignal.timeout(5000)}).then(()=>console.log(\"W internet\")).catch(()=>console.log(\"B internet\"))"
+  node -e "fetch(\"http://tamer:3003/health\",{signal:AbortSignal.timeout(4000)}).then(()=>console.log(\"W tamer\")).catch(()=>console.log(\"B tamer\"))"
+  node -e "fetch(\"http://lumo-relay:4000/health/liveliness\",{signal:AbortSignal.timeout(5000)}).then(()=>console.log(\"W relay\")).catch(()=>console.log(\"B relay\"))"' 2>&1)"
+for p in /etc/lumo-probe /usr/bin/lumo-probe /lumo-probe /lumo/inbox/lumo-probe /home/node/.config/opencode/opencode.json host-visible root internet tamer; do
+  echo "$probe" | grep -q "^B $p$" && ok "blocked: $p" || bad "NOT blocked: $p"
+done
+echo "$probe" | grep -q "^W /lumo/out/.lumo-probe$" && ok "writable: /lumo/out (as intended)" || bad "can't write /lumo/out"
+echo "$probe" | grep -q "^W relay$" && ok "reaches Lumo via LiteLLM" || bad "can't reach LiteLLM"
+
+echo; echo "$pass passed, $fail failed"
+[ "$fail" -eq 0 ]
