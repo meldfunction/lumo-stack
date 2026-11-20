@@ -73,6 +73,8 @@ jail=(
   --pids-limit 512 --memory 4g --cpus 4
   --network lumo-jail
   -e LITELLM_KEY
+  -e OPENCODE_DISABLE_MODELS_FETCH=1 -e OPENCODE_DISABLE_DEFAULT_PLUGINS=1
+  -e OPENCODE_DISABLE_LSP_DOWNLOAD=1 -e OPENCODE_DISABLE_AUTOUPDATE=1 -e OPENCODE_DISABLE_EXTERNAL_SKILLS=1
   -v lumo-opencode-home:/home/node
   -v $STACK/opencode.json:/home/node/.config/opencode/opencode.json:ro
   -v $LUMO_HOME/code:/lumo/code
