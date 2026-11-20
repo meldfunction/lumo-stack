@@ -1,0 +1,381 @@
+<title>Lumo Stack</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@500;600;700&display=swap">
+<style>
+  /* Layout: a single reading column with full-bleed bands; terminal panels carry the product's voice. */
+  :root {
+    --bg: #f5f7f6; --surface: #ffffff; --ink: #142028; --muted: #55646d; --line: #d9e1df;
+    --accent: #0f7c74; --accent-ink: #ffffff; --accent-soft: #e3f1ef;
+    --term-bg: #10181d; --term-ink: #d7e3e0; --term-dim: #7f9590; --term-ok: #5fd0b4; --term-warn: #e6b45c;
+    --warn: #9a5b00; --warn-soft: #fbf1df;
+    --display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+    --body: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --bg: #0f1518; --surface: #162026; --ink: #e3ebe9; --muted: #98a9a6; --line: #26343a;
+    --accent: #4cc2b0; --accent-ink: #0b1a17; --accent-soft: #15302d;
+    --term-bg: #0a0f12; --term-ink: #d7e3e0; --term-dim: #6f857f; --term-ok: #5fd0b4; --term-warn: #e6b45c;
+    --warn: #f0b85a; --warn-soft: #2a2213; color-scheme: dark; } }
+  :root[data-theme="dark"] {
+    --bg: #0f1518; --surface: #162026; --ink: #e3ebe9; --muted: #98a9a6; --line: #26343a;
+    --accent: #4cc2b0; --accent-ink: #0b1a17; --accent-soft: #15302d;
+    --term-bg: #0a0f12; --term-ink: #d7e3e0; --term-dim: #6f857f; --term-ok: #5fd0b4; --term-warn: #e6b45c;
+    --warn: #f0b85a; --warn-soft: #2a2213; color-scheme: dark; }
+
+  * { box-sizing: border-box }
+  body { background: var(--bg); color: var(--ink); font: 16px/1.6 var(--body); }
+  .wrap { max-width: 980px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  section { padding-block: 56px; border-top: 1px solid var(--line); }
+  h1, h2, h3 { font-family: var(--display); text-wrap: balance; line-height: 1.15; margin: 0; }
+  h1 { font-size: clamp(2.4rem, 6vw, 3.6rem); letter-spacing: -0.02em; }
+  h2 { font-size: 1.75rem; margin-bottom: 12px; }
+  h3 { font-size: 1.1rem; margin-bottom: 6px; }
+  p { margin: 0; max-width: 65ch; }
+  .lead { font-size: 1.15rem; color: var(--muted); margin-top: 14px; }
+  .eyebrow { font: 600 12px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--accent); margin-bottom: 14px; }
+  code, kbd { font-family: var(--mono); font-size: .88em; background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; }
+  a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* Hero */
+  header.hero { padding-block: 64px 48px; }
+  .hero-grid { display: grid; grid-template-columns: 1.1fr 1fr; gap: 40px; align-items: center; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
+  .chip { font: 500 13px/1 var(--body); padding: 7px 11px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); }
+  .chip b { color: var(--accent); font-weight: 600; }
+  .chip.soon { color: var(--muted); border-style: dashed; }
+  .notice { margin-top: 22px; padding: 12px 14px; border-left: 3px solid var(--warn); background: var(--warn-soft); border-radius: 0 8px 8px 0; font-size: 14px; max-width: 60ch; }
+  .notice strong { color: var(--warn); }
+
+  /* Terminal panels */
+  .term { background: var(--term-bg); color: var(--term-ink); border-radius: 12px; font: 13px/1.65 var(--mono); overflow: hidden; min-width: 0; }
+  .term .bar { display: flex; gap: 6px; padding: 10px 12px; border-bottom: 1px solid #ffffff14; }
+  .term .bar i { width: 10px; height: 10px; border-radius: 50%; background: #ffffff22; }
+  .term pre { margin: 0; padding: 14px 16px 16px; overflow-x: auto; white-space: pre; }
+  .term .p { color: var(--term-ok); } .term .d { color: var(--term-dim); } .term .w { color: var(--term-warn); }
+
+  /* Three ways in */
+  .ways { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 26px; }
+  .way { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .way .cmd { font: 500 13px/1.4 var(--mono); color: var(--accent); }
+  .way p { color: var(--muted); font-size: 15px; }
+
+  /* Flow diagram */
+  .flow { margin-top: 26px; overflow-x: auto; }
+  .flow-inner { display: grid; grid-template-columns: auto 28px auto 28px auto 28px auto; align-items: center; min-width: 760px; gap: 0; }
+  .col { display: flex; flex-direction: column; gap: 10px; }
+  .node { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: 14px; }
+  .node small { display: block; font: 12px/1.3 var(--mono); color: var(--muted); }
+  .node.key { border-color: var(--accent); background: var(--accent-soft); }
+  .arrow { height: 2px; background: var(--muted); position: relative; opacity: .6; }
+  .arrow::after { content: ""; position: absolute; right: -1px; top: -4px; border: 5px solid transparent; border-left-color: var(--muted); }
+  .flow-note { margin-top: 14px; color: var(--muted); font-size: 14px; }
+
+  /* Jail */
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; margin-top: 22px; align-items: start; }
+  ul.checks { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+  ul.checks li { display: grid; grid-template-columns: 22px 1fr; gap: 8px; }
+  ul.checks li::before { content: "✓"; color: var(--accent); font-weight: 700; }
+  .mounts { width: 100%; border-collapse: collapse; margin-top: 18px; font-size: 14px; }
+  .mounts th, .mounts td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  .mounts th { font: 600 12px/1 var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .mounts td:first-child { font-family: var(--mono); font-size: 13px; }
+  .tag { font: 600 11px/1 var(--mono); padding: 4px 7px; border-radius: 5px; background: var(--accent-soft); color: var(--accent); }
+  .tag.ro { background: var(--warn-soft); color: var(--warn); }
+
+  /* Commands */
+  .tablewrap { overflow-x: auto; margin-top: 18px; }
+  table.cmds { width: 100%; border-collapse: collapse; font-size: 15px; min-width: 560px; }
+  table.cmds td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.cmds td:first-child { font-family: var(--mono); font-size: 13.5px; white-space: nowrap; color: var(--accent); width: 1%; }
+  table.cmds tr.group td { font: 600 12px/1 var(--mono); text-transform: uppercase; letter-spacing: .1em; color: var(--muted); padding-top: 22px; border-bottom: 0; }
+
+  /* Install */
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 22px; }
+  .tab { font: 600 14px/1 var(--body); padding: 10px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; }
+  .tab[aria-selected="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .tab .s { font-weight: 400; opacity: .7; margin-left: 6px; font-size: 12px; }
+  .panel { margin-top: 16px; display: grid; gap: 18px; }
+  .steps { margin: 0; padding-left: 22px; display: grid; gap: 14px; }
+  .steps li { padding-left: 4px; }
+  .code { display: flex; align-items: stretch; background: var(--term-bg); color: var(--term-ink); border-radius: 10px; margin-top: 8px; overflow: hidden; min-width: 0; }
+  .code pre { margin: 0; padding: 12px 14px; font: 13px/1.6 var(--mono); overflow-x: auto; flex: 1; min-width: 0; }
+  .copy { font: 600 12px/1 var(--body); border: 0; border-left: 1px solid #ffffff14; background: transparent; color: var(--term-dim); padding: 0 14px; cursor: pointer; }
+  .copy:hover { color: var(--term-ink); }
+  .req { display: flex; flex-wrap: wrap; gap: 8px; }
+  .req span { font-size: 13px; padding: 6px 10px; border-radius: 6px; background: var(--surface); border: 1px solid var(--line); }
+  .soonbox { background: var(--surface); border: 1px dashed var(--line); border-radius: 12px; padding: 20px; }
+  .soonbox ul { margin: 10px 0 0; padding-left: 20px; color: var(--muted); }
+
+  /* Limits */
+  .limits { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 22px; }
+  .limit { padding: 16px; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); }
+  .limit p { color: var(--muted); font-size: 15px; }
+
+  footer { padding-block: 32px 48px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+
+  @media (max-width: 820px) {
+    .hero-grid, .split, .ways, .limits { grid-template-columns: 1fr; }
+    header.hero { padding-block: 40px 32px; }
+    section { padding-block: 40px; }
+  }
+  @media (prefers-reduced-motion: no-preference) { .tab, .copy { transition: background .15s, color .15s; } }
+</style>
+
+<header class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <div class="eyebrow">v0.1 · self-hosted</div>
+      <h1>Lumo Stack</h1>
+      <p class="lead">A private way into Proton Lumo from Claude Code, from a locked-down coding assistant, and from your browser. It runs on your own machine, with no Anthropic or OpenAI account.</p>
+      <div class="chips">
+        <span class="chip"><b>macOS</b> available now</span>
+        <span class="chip soon">Windows · v0.2</span>
+        <span class="chip soon">Linux · v0.2</span>
+      </div>
+      <p class="notice"><strong>Unofficial.</strong> Lumo has no public API yet. Lumo Stack uses <a href="https://github.com/ZeroTricks/lumo-tamer" target="_blank" rel="noopener">lumo-tamer</a>, a community bridge that talks to Lumo the way Proton's web app does. Proton could block it, and it could put your Proton account at risk. Not affiliated with or endorsed by Proton.</p>
+    </div>
+    <div class="term" aria-label="Example terminal session">
+      <div class="bar"><i></i><i></i><i></i></div>
+<pre><span class="p">$</span> lumo status
+<span class="p">up</span>    lumo-tamer   127.0.0.1:3003
+<span class="p">up</span>    LiteLLM      127.0.0.1:4000
+<span class="p">up</span>    lumo-relay (jail network)
+<span class="p">up</span>    Open WebUI   localhost:8080
+<span class="p">up</span>    Lumo Home    localhost:8090
+<span class="d">      Proton login: valid, renews automatically</span>
+
+<span class="p">$</span> lumo run -p demo "add a test for calc.py"
+<span class="d">&gt; build · lumo</span>
+← Write test_calc.py
+<span class="d">Wrote file successfully.</span></pre>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section>
+    <div class="wrap">
+      <div class="eyebrow">Three ways in</div>
+      <h2>Use Lumo where you already work</h2>
+      <p>Each one talks only to Lumo, through a bridge and router that run on your machine and listen on localhost.</p>
+      <div class="ways">
+        <div class="way">
+          <h3>Claude Code</h3>
+          <span class="cmd">claude-lumo</span>
+          <p>The Claude Code terminal interface with Lumo as the model. No Anthropic subscription or API key; the launcher checks every route points at Lumo before it starts.</p>
+        </div>
+        <div class="way">
+          <h3>Coding assistant</h3>
+          <span class="cmd">lumo · lumo code-web</span>
+          <p>OpenCode in a container that can see only your workspace and has no internet. In the terminal or in the browser, with git snapshots so any session can be undone.</p>
+        </div>
+        <div class="way">
+          <h3>Browser</h3>
+          <span class="cmd">lumo web · lumo home</span>
+          <p>Chat in Open WebUI, plus Lumo Home: a dashboard for status, one-click Proton sign-in, and moving files in and out of the workspace.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="eyebrow">How it fits together</div>
+      <h2>One path to Lumo</h2>
+      <div class="flow" role="img" aria-label="Claude Code, OpenCode and Open WebUI all send requests to LiteLLM on port 4000, which forwards only to lumo-tamer on port 3003, which talks to Proton Lumo.">
+        <div class="flow-inner">
+          <div class="col">
+            <div class="node">Claude Code<small>claude-lumo</small></div>
+            <div class="node">OpenCode, jailed<small>via lumo-relay</small></div>
+            <div class="node">Open WebUI<small>localhost:8080</small></div>
+          </div>
+          <div class="arrow"></div>
+          <div class="node">LiteLLM<small>127.0.0.1:4000 · Lumo routes only</small></div>
+          <div class="arrow"></div>
+          <div class="node">lumo-tamer<small>127.0.0.1:3003 · your login, encrypted</small></div>
+          <div class="arrow"></div>
+          <div class="node key">Proton Lumo<small>lumo, lumo-max, lumo-lite</small></div>
+        </div>
+      </div>
+      <p class="flow-note">Every launcher reads the router config before starting and refuses to run if any route leads anywhere other than Lumo.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="eyebrow">The coding jail</div>
+      <h2>An assistant that can't wander</h2>
+      <div class="split">
+        <div>
+          <ul class="checks">
+            <li>Read-only system, no root, no sudo, no Linux capabilities</li>
+            <li>Internal network with no internet; one relay leads only to Lumo</li>
+            <li>Its own config lives outside the workspace, mounted read-only</li>
+            <li>CPU, memory and process limits</li>
+            <li>A git snapshot before every session; <code>lumo restore</code> rolls back, and the restore can be undone too</li>
+            <li>Browser UI is password-protected, with the password kept in your keychain</li>
+          </ul>
+          <table class="mounts">
+            <thead><tr><th>Inside the jail</th><th>Access</th><th>For</th></tr></thead>
+            <tbody>
+              <tr><td>/lumo/code</td><td><span class="tag">read-write</span></td><td>Projects, one folder each</td></tr>
+              <tr><td>/lumo/inbox</td><td><span class="tag ro">read-only</span></td><td>Files you hand in</td></tr>
+              <tr><td>/lumo/out</td><td><span class="tag">read-write</span></td><td>Results for you</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="term" aria-label="Output of lumo doctor">
+          <div class="bar"><i></i><i></i><i></i></div>
+<pre><span class="p">$</span> lumo doctor
+<span class="d">Coding jail</span>
+  <span class="p">✓</span> lumo-jail network is internal
+  <span class="p">✓</span> blocked: /etc/lumo-probe
+  <span class="p">✓</span> blocked: /usr/bin/lumo-probe
+  <span class="p">✓</span> blocked: /lumo/inbox/lumo-probe
+  <span class="p">✓</span> blocked: opencode.json
+  <span class="p">✓</span> blocked: /Users-visible
+  <span class="p">✓</span> blocked: root
+  <span class="p">✓</span> blocked: internet
+  <span class="p">✓</span> writable: /lumo/out (as intended)
+  <span class="p">✓</span> reaches Lumo via relay
+
+<span class="p">29 passed</span>, 0 failed</pre>
+        </div>
+      </div>
+      <p class="flow-note">These aren't settings it reads back: <code>lumo doctor</code> starts a jailed container and actually attempts each write and connection.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="eyebrow">Commands</div>
+      <h2>Everything is <code>lumo</code></h2>
+      <p>Every command starts whatever isn't running first, and logs what it did.</p>
+      <div class="tablewrap">
+        <table class="cmds">
+          <tbody>
+            <tr class="group"><td colspan="2">Work</td></tr>
+            <tr><td>lumo</td><td>Coding assistant in the terminal. Add <code>--max</code> for the stronger Lumo tier.</td></tr>
+            <tr><td>lumo open &lt;project&gt;</td><td>Work in one project folder; new projects get an <code>AGENTS.md</code> tuned for Lumo.</td></tr>
+            <tr><td>lumo run "task"</td><td>One-shot task, no interactive screen.</td></tr>
+            <tr><td>lumo code-web</td><td>The coding assistant in your browser.</td></tr>
+            <tr><td>lumo web</td><td>Chat in Open WebUI.</td></tr>
+            <tr><td>lumo ask "…" · lumo chat</td><td>A quick answer, or a plain terminal chat.</td></tr>
+            <tr><td>claude-lumo</td><td>Claude Code on Lumo (optional add-on).</td></tr>
+            <tr class="group"><td colspan="2">Files and undo</td></tr>
+            <tr><td>lumo import · lumo fetch &lt;url&gt;</td><td>Copy files, or download a document, into the read-only inbox.</td></tr>
+            <tr><td>lumo export</td><td>Copy results out of the workspace.</td></tr>
+            <tr><td>lumo snapshots · lumo restore</td><td>List undo points and roll a project back.</td></tr>
+            <tr class="group"><td colspan="2">Keep it running</td></tr>
+            <tr><td>lumo home</td><td>Dashboard: status, sign-in, files, chat, code.</td></tr>
+            <tr><td>lumo login</td><td>Sign in to Proton. A browser opens, you sign in, it saves the login and closes.</td></tr>
+            <tr><td>lumo doctor</td><td>29 health and security checks.</td></tr>
+            <tr><td>lumo update</td><td>Update pinned components, with automatic rollback if a check fails.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="install">
+    <div class="wrap">
+      <div class="eyebrow">Install</div>
+      <h2>Install Lumo Stack</h2>
+      <p>You'll need a Proton account. Proton Unlimited includes free-tier Lumo; the Lumo Plus add-on raises usage limits.</p>
+      <div class="tabs" role="tablist" aria-label="Platform">
+        <button class="tab" role="tab" id="t-mac" aria-selected="true" aria-controls="p-mac">macOS</button>
+        <button class="tab" role="tab" id="t-win" aria-selected="false" aria-controls="p-soon">Windows<span class="s">v0.2</span></button>
+        <button class="tab" role="tab" id="t-lin" aria-selected="false" aria-controls="p-soon">Linux<span class="s">v0.2</span></button>
+      </div>
+
+      <div class="panel" id="p-mac" role="tabpanel" aria-labelledby="t-mac">
+        <div>
+          <h3>Before you start</h3>
+          <div class="req">
+            <span>macOS</span><span>OrbStack or Docker Desktop</span><span>Node.js 20+</span><span>Python 3.10+</span><span>git</span><span>Chrome, Brave or Edge</span>
+          </div>
+          <div class="code"><pre>brew install git node python
+brew install --cask orbstack</pre><button class="copy" type="button">Copy</button></div>
+        </div>
+        <div class="split" style="margin-top:0">
+          <div>
+            <h3>With dialogs</h3>
+            <ol class="steps">
+              <li>Download the Lumo Stack folder.</li>
+              <li>Double-click <strong>Install Lumo.command</strong>. The first time, right-click it and choose Open.</li>
+              <li>Pick where Lumo keeps its files, or use the suggested <code>~/lumo</code>.</li>
+              <li>When asked, sign in to Proton in the browser window that opens. It closes by itself.</li>
+              <li>Lumo Home opens in your browser when everything is ready.</li>
+            </ol>
+          </div>
+          <div>
+            <h3>In the terminal</h3>
+            <ol class="steps">
+              <li>Get the code into <code>~/lumo-stack</code> and run the installer:
+                <div class="code"><pre>cd ~/lumo-stack
+./install</pre><button class="copy" type="button">Copy</button></div></li>
+              <li>Preview first without changing anything:
+                <div class="code"><pre>./install --dry-run</pre><button class="copy" type="button">Copy</button></div></li>
+              <li>Options: <code>--workspace DIR</code>, <code>--with-claude</code>, <code>--no-login</code>.</li>
+            </ol>
+          </div>
+        </div>
+        <p class="flow-note">The first install downloads a few GB (Open WebUI, LiteLLM, OpenCode) and takes 10–20 minutes. It ends with the Proton sign-in and <code>lumo doctor</code>. Re-running is safe: keys, settings and your login are kept. To remove everything, run <code>./uninstall</code>; add <code>--purge</code> to also delete your workspace.</p>
+      </div>
+
+      <div class="panel" id="p-soon" role="tabpanel" hidden>
+        <div class="soonbox">
+          <h3>Windows and Linux are coming in v0.2</h3>
+          <p>The next release moves the whole stack into Docker Compose, so the same setup runs on every platform with only Docker and a browser installed.</p>
+          <ul>
+            <li>Sign in to Proton through a browser container, from any browser</li>
+            <li>The setup wizard runs in Lumo Home, identical on every platform</li>
+            <li>Terminal installers for each platform: <code>install.sh</code> and <code>install.ps1</code></li>
+            <li>The same jail, the same localhost-only ports, the same <code>lumo doctor</code> checks</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="eyebrow">Limits</div>
+      <h2>What to expect</h2>
+      <div class="limits">
+        <div class="limit"><h3>Tool calling is experimental</h3><p>Simple edits and file writes work. Long, many-step coding tasks misfire more than with Claude or GPT models.</p></div>
+        <div class="limit"><h3>Lumo-only features stay in Proton's apps</h3><p>Web search, image generation and memory don't come through the bridge.</p></div>
+        <div class="limit"><h3>Your Proton login renews itself</h3><p>It lasts 24 hours and refreshes automatically. If Proton signs you out, Lumo Home and a notification tell you to sign in again.</p></div>
+        <div class="limit"><h3>Built on an unofficial bridge</h3><p>When Proton ships its official Lumo API, the bridge can be swapped out and the account risk goes away.</p></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">Lumo Stack v0.1.0. Built on <a href="https://github.com/ZeroTricks/lumo-tamer" target="_blank" rel="noopener">lumo-tamer</a>, LiteLLM, OpenCode and Open WebUI. Not affiliated with Proton AG.</div>
+</footer>
+
+<script>
+(function () {
+  var tabs = document.querySelectorAll('.tab'), mac = document.getElementById('p-mac'), soon = document.getElementById('p-soon');
+  tabs.forEach(function (t) {
+    t.addEventListener('click', function () {
+      tabs.forEach(function (x) { x.setAttribute('aria-selected', String(x === t)); });
+      var isMac = t.id === 't-mac'; mac.hidden = !isMac; soon.hidden = isMac;
+    });
+  });
+  document.querySelectorAll('.copy').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var pre = b.parentNode.querySelector('pre'), text = pre.textContent;
+      var done = function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy'; }, 1500); };
+      var select = function () { var r = document.createRange(); r.selectNodeContents(pre); var s = getSelection(); s.removeAllRanges(); s.addRange(r); b.textContent = 'Selected'; };
+      try { navigator.clipboard.writeText(text).then(done, select); } catch (e) { select(); }
+    });
+  });
+})();
+</script>
