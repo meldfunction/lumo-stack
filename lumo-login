@@ -48,10 +48,36 @@ bpid=$!
 for i in {1..30}; do curl -s -m 1 -o /dev/null http://127.0.0.1:$PORT/json/version && break; sleep 1; done
 
 deadline=$(( $(date +%s) + 600 ))
+nokey_since=0   # when we first saw a session without the key password
+lasttabs=""     # tab URLs last written to the log
 while (( $(date +%s) < deadline )); do
   kill -0 $bpid 2>/dev/null || { state failed "The login browser was closed before sign-in finished."; exit 1; }
+  # The extractor below navigates the tab (to fetch keys), which reloads the sign-in pages.
+  # So only run it once sign-in is over: a Lumo tab is open and no Proton account/login page is.
+  # Listing tabs through the debug port doesn't touch them.
+  tabs=$(curl -s -m 2 http://127.0.0.1:$PORT/json 2>/dev/null | python3 -c \
+    "import json,sys; print('\n'.join(t['url'] for t in json.load(sys.stdin) if t.get('type')=='page'))" 2>/dev/null)
+  short=${(j: :)${${(f)tabs}%%[?#]*}}
+  [[ $short != $lasttabs ]] && { log "tabs: $short"; lasttabs=$short; }
+  if print -r -- "$tabs" | grep -q '^https://account\.proton\.me' \
+     || ! print -r -- "$tabs" | grep -q '^https://lumo\.proton\.me/' \
+     || print -r -- "$tabs" | grep -Eq '^https://lumo\.proton\.me/(.*/)?(guest|login)'; then
+    state waiting "Waiting for you to sign in to Lumo in the browser window..."
+    sleep 2; continue
+  fi
   out=$(cd $TAMER && printf 'http://localhost:%s\n' $PORT | timeout 45 node dist/src/tamer.js auth browser 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
   if print -r -- "$out" | grep -q "configured and valid"; then
+    # Proton issues a session right after the first password, before the authenticator-code
+    # and second-password pages. Keep the browser open until the key password is there;
+    # if it never arrives (some accounts), accept the session after 30 seconds back on Lumo.
+    if ! print -r -- "$out" | grep -q "hasKeyPassword: yes"; then
+      (( nokey_since )) || nokey_since=$(date +%s)
+      if (( $(date +%s) - nokey_since < 30 )); then
+        state waiting "Password accepted. Finish the authenticator code and second password in the browser..."
+        sleep 5; continue
+      fi
+      log "no key password after 30 seconds on Lumo; saving the session without it"
+    fi
     state saving "Signed in. Saving the login..."
     cleanup; bpid=""; profile=""
     launchctl kickstart -k gui/$(id -u)/$(agent lumo-tamer)
