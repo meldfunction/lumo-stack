@@ -278,7 +278,7 @@
     <div class="wrap">
       <span class="kicker">Under the hood</span>
       <h2>One road in, one road out</h2>
-      <div class="flow" role="img" aria-label="Claude Code, the jailed OpenCode agent and Open WebUI all send requests to LiteLLM on port 4000, which forwards only to lumo-tamer on port 3003, which talks to Proton Lumo.">
+      <div class="flow" role="img" aria-label="Claude Code, the jailed OpenCode agent and Open WebUI all send requests to LiteLLM on port 4000, which forwards only to lumo-bridge on port 3003, which talks to Proton Lumo.">
         <div class="flow-inner">
           <div class="col">
             <div class="node">Claude Code<small>claude-lumo</small></div>
@@ -288,7 +288,7 @@
           <div class="arrow"></div>
           <div class="node">LiteLLM<small>127.0.0.1:4000 · Lumo routes only</small></div>
           <div class="arrow"></div>
-          <div class="node">lumo-tamer<small>127.0.0.1:3003 · login encrypted</small></div>
+          <div class="node">lumo-bridge<small>127.0.0.1:3003 · login encrypted</small></div>
           <div class="arrow"></div>
           <div class="node key">Proton Lumo<small>lumo · lumo-max · lumo-lite</small></div>
         </div>
@@ -384,7 +384,7 @@
       </div>
       <p class="note">Proton Unlimited, Duo and Family come with free-tier Lumo; Plus is an <a href="https://proton.me/support/proton-add-ons" target="_blank" rel="noopener">add-on</a>. Visionary and Workspace Premium include Plus. Prices as Proton listed them in November 2026; <a href="https://proton.me/lumo/pricing" target="_blank" rel="noopener">check the latest</a>.</p>
 
-      <div class="warn"><strong>Read this bit.</strong> Lumo doesn't have a public API yet, so Lumo Stack uses <a href="https://github.com/ZeroTricks/lumo-tamer" target="_blank" rel="noopener">lumo-tamer</a>, a community bridge that talks to Lumo the way Proton's own web app does. Proton could block it, and it could put your Proton account at risk. Not affiliated with or endorsed by Proton. Rebellious, yes. Reckless, no: go in with your eyes open.</div>
+      <div class="warn"><strong>Read this bit.</strong> Lumo doesn't have a public API yet, so Lumo Stack uses <a href="https://github.com/meldfunction/lumo-bridge" target="_blank" rel="noopener">lumo-bridge</a>, our fork of the community bridge <a href="https://github.com/ZeroTricks/lumo-tamer" target="_blank" rel="noopener">lumo-tamer</a>, which talks to Lumo the way Proton's own web app does. Our fork adds fixes for sign-in and local-only access. Proton could block it, and it could put your Proton account at risk. Not affiliated with or endorsed by Proton. Rebellious, yes. Reckless, no: go in with your eyes open.</div>
 
       <div class="tabs" role="tablist" aria-label="Platform">
         <button class="tab" role="tab" id="t-mac" aria-selected="true" aria-controls="p-mac">macOS</button>
@@ -456,7 +456,7 @@ cd ~/lumo-stack && ./install</pre><button class="copy" type="button">Copy</butto
 </main>
 
 <footer>
-  <div class="wrap">Lumo Stack v0.1.0 · <a href="https://github.com/meldfunction/lumo-stack" target="_blank" rel="noopener">Source on GitHub</a>. Built on <a href="https://github.com/ZeroTricks/lumo-tamer" target="_blank" rel="noopener">lumo-tamer</a>, LiteLLM, OpenCode and Open WebUI. Not affiliated with Proton AG. Made by people who read privacy policies for fun.</div>
+  <div class="wrap">Lumo Stack v0.1.0 · <a href="https://github.com/meldfunction/lumo-stack" target="_blank" rel="noopener">Source on GitHub</a>. Built on <a href="https://github.com/meldfunction/lumo-bridge" target="_blank" rel="noopener">lumo-bridge</a> (a fork of <a href="https://github.com/ZeroTricks/lumo-tamer" target="_blank" rel="noopener">lumo-tamer</a>), LiteLLM, OpenCode and Open WebUI. Not affiliated with Proton AG. Made by people who read privacy policies for fun.</div>
 </footer>
 
 <script>
