@@ -1,0 +1,159 @@
+#!/bin/zsh
+# lumo-cloudflare — opt in to Cloudflare Workers AI models next to Lumo.
+#
+#   lumo-cloudflare on [--new-token]   add cf-* models to LiteLLM (asks for account ID + token once)
+#   lumo-cloudflare off [--forget]     remove them (--forget also deletes the Keychain token + account ID)
+#   lumo-cloudflare status             show what's configured and whether the token works
+#   lumo-cloudflare usage              today's neurons per model (real numbers from Cloudflare analytics)
+#   lumo-cloudflare models             flag cf-* models that are retired or retiring within 30 days
+#
+# Nothing personal goes into the repo: the account ID is saved to lumo.env (gitignored),
+# the API token to the macOS Keychain (item "cloudflare-workers-ai"), read at LiteLLM start
+# by start.sh. Without this, the stack stays Lumo-only and claude-lumo refuses any cf-* route.
+# Token: Cloudflare dashboard > My Profile > API Tokens > "Workers AI" template.
+source ${0:A:h}/lib.zsh
+zmodload zsh/datetime  # EPOCHREALTIME for timings
+ITEM=cloudflare-workers-ai
+PLIST=~/Library/LaunchAgents/$(agent litellm).plist
+START=$LITELLM_DIR/start.sh
+die() { print -u2 "lumo-cloudflare: $*"; exit 1; }
+
+token()   { /usr/bin/security find-generic-password -a "$USER" -s $ITEM -w 2>/dev/null; }
+verify()  {  # verify <account>: works for account-owned and user tokens
+  local k=$(token); [[ -n $k ]] || return 1
+  curl -s -m 20 "https://api.cloudflare.com/client/v4/accounts/$1/tokens/verify" -H "Authorization: Bearer $k" | grep -q '"success":true' && return 0
+  curl -s -m 20 "https://api.cloudflare.com/client/v4/user/tokens/verify" -H "Authorization: Bearer $k" | grep -q '"success":true'
+}
+edit_cfg() {  # edit_cfg add|remove : manage the marked blocks in config.yaml
+  CF_ACCOUNT_ID=$CF_ACCOUNT_ID python3 - "$1" "$LITELLM_CFG" "$LUMO_STACK/templates/litellm-cloudflare.yaml" <<'PY'
+import os, re, sys
+mode, cfg, tpl = sys.argv[1:]
+s = open(cfg).read()
+s = re.sub(r"\n[ \t]*# >>> cloudflare[^\n]*\n[\s\S]*?# <<< cloudflare <<<[^\n]*", "", s)
+s = re.sub(r"\n[ \t]*# >>> cloudflare-settings[^\n]*\n[\s\S]*?# <<< cloudflare-settings <<<[^\n]*", "", s)
+s = re.sub(r"\n*# >>> cloudflare-router[^\n]*\n[\s\S]*?# <<< cloudflare-router <<<[^\n]*\n?", "\n", s)
+if mode == "add":
+    models = open(tpl).read().replace("{{CF_ACCOUNT_ID}}", os.environ["CF_ACCOUNT_ID"]).rstrip("\n")
+    settings = ("  # >>> cloudflare-settings (managed by lumo-cloudflare) >>>\n"
+                "  # Translate /v1/messages to chat/completions; Workers AI rejects the Responses API.\n"
+                "  use_chat_completions_url_for_anthropic_messages: true\n"
+                "  # <<< cloudflare-settings <<<")
+    if "\nlitellm_settings:" not in s:
+        sys.exit("config has no litellm_settings: section")
+    s = s.replace("\nlitellm_settings:", "\n" + models + "\n\nlitellm_settings:\n" + settings, 1)
+    if "\nrouter_settings:" in s:
+        sys.exit("config already has router_settings:; merge the cloudflare fallbacks by hand")
+    s = s.rstrip("\n") + ("\n\n# >>> cloudflare-router (managed by lumo-cloudflare) >>>\n"
+        "# On error/timeout, retry once then fall back to another Cloudflare model.\n"
+        "router_settings:\n  num_retries: 1\n  timeout: 120\n  fallbacks:\n"
+        "    - cf-llama4: [cf-gptoss, cf-mistral, lumo]\n    - cf-gptoss: [cf-mistral, cf-gemma4, lumo]\n"
+        "    - cf-mistral: [cf-gptoss, cf-gemma4, lumo]\n    - cf-gemma4: [cf-gptoss, cf-mistral, lumo]\n"
+        "    - cf-smart: [cf-mistral, lumo]\n    - cf-fast: [cf-mistral, lumo]\n"
+        "# Fallbacks only to models with >=128k context (cf-smart is 24k: too small for agent prompts).\n"
+        "# Lumo last: when the free 10k-neuron daily cap is hit (error 4006), sessions slow down instead of failing.\n"
+        "# <<< cloudflare-router <<<\n")
+    s = re.sub(r"\n{3,}", "\n\n", s)
+open(cfg, "w").write(s)
+PY
+}
+reload() {
+  if [[ ! -x $START ]] || ! /usr/libexec/PlistBuddy -c "Print :ProgramArguments:0" $PLIST 2>/dev/null | grep -qx "$START"; then
+    export LITELLM_DIR LUMO_STACK LABEL=$LUMO_LABEL LOG_DIR
+    render $LUMO_STACK/templates/litellm-start.sh $START && chmod 700 $START
+    render $LUMO_STACK/templates/launchagents/litellm.plist $PLIST
+    launchctl unload $PLIST 2>/dev/null; launchctl load $PLIST
+  else
+    launchctl kickstart -k gui/$(id -u)/$(agent litellm)
+  fi
+  for i in {1..45}; do curl -s -m 2 -o /dev/null http://127.0.0.1:$LITELLM_PORT/health/liveliness && return 0; sleep 2; done
+  die "LiteLLM didn't come back; see $LOG_DIR/litellm.log"
+}
+smoke() {  # one tiny request per cf-* model, timed
+  local k=$(litellm_key) m t0 r
+  for m in $(sed -n 's/^  - model_name: \(cf-[a-z0-9-]*\)$/\1/p' $LITELLM_CFG); do
+    t0=$EPOCHREALTIME
+    r=$(curl -s -m 90 http://127.0.0.1:$LITELLM_PORT/v1/chat/completions -H "Authorization: Bearer $k" -H "Content-Type: application/json" \
+      -d "{\"model\":\"$m\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly: ok\"}],\"max_tokens\":300}" \
+      | python3 -c "import json,sys; d=json.load(sys.stdin); print((d.get('choices') or [{}])[0].get('message',{}).get('content') or 'ERROR '+str(d.get('error',{}).get('message',''))[:80])")
+    printf "  %-11s %5.1fs  %s\n" $m $(( EPOCHREALTIME - t0 )) "$r"
+  done
+}
+
+usage() {  # today's neurons per model from Cloudflare analytics (UTC day); prints total last
+  local k=$(token); [[ -n $k && -n $CF_ACCOUNT_ID ]] || { print "usage: no token/account"; return 1; }
+  curl -s -m 20 https://api.cloudflare.com/client/v4/graphql -H "Authorization: Bearer $k" -H "Content-Type: application/json" \
+    -d "{\"query\":\"{viewer{accounts(filter:{accountTag:\\\"$CF_ACCOUNT_ID\\\"}){aiInferenceAdaptiveGroups(limit:100,filter:{date_geq:\\\"$(date -u +%F)\\\"}){sum{totalNeurons} dimensions{modelId}}}}}\"}" \
+  | python3 -c '
+import json, sys
+budget = float(sys.argv[1])
+try:
+    rows = json.load(sys.stdin)["data"]["viewer"]["accounts"][0]["aiInferenceAdaptiveGroups"]
+except Exception as e:
+    sys.exit(f"usage: analytics unavailable ({e})")
+rows.sort(key=lambda r: -r["sum"]["totalNeurons"])
+total = sum(r["sum"]["totalNeurons"] for r in rows)
+for r in rows:
+    mid, n = r["dimensions"]["modelId"], r["sum"]["totalNeurons"]
+    print(f"  {mid:<48} {n:>8.0f}")
+print(f"TOTAL {total:.0f} / {budget:.0f} neurons today (UTC) = {total / budget * 100:.0f}%")
+' ${CF_NEURON_BUDGET:-10000}
+}
+deprecations() {  # warn for cf-* models retired or retiring within 30 days
+  local k=$(token) id; [[ -n $k ]] || return 1
+  for id in $(sed -n 's#^ *model: openai/\(@cf/[^ ]*\)$#\1#p' $LITELLM_CFG); do
+    curl -s -m 20 "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/ai/models/search?search=${id##*/}" -H "Authorization: Bearer $k" \
+    | python3 -c '
+import json, sys, datetime
+want = sys.argv[1]
+m = next((m for m in json.load(sys.stdin).get("result", []) if m["name"] == want), None)
+if not m:
+    print(f"UNLISTED {want}"); sys.exit()
+p = {x["property_id"]: x["value"] for x in m.get("properties", [])}
+d = p.get("planned_deprecation_date")
+if d:
+    days = (datetime.date.fromisoformat(d[:10]) - datetime.date.today()).days
+    print(("RETIRED" if days <= 0 else "SOON") + f" {want}: deprecation {d[:10]} ({days} days)" if days <= 30 else f"OK {want}")
+else:
+    print(f"OK {want}")
+' $id | while read -r st rest; do
+      if [[ $st == UNLISTED ]]; then  # hidden aliases exist; a 1-token call decides
+        curl -s -m 30 "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/ai/v1/chat/completions" -H "Authorization: Bearer $k" \
+          -H "Content-Type: application/json" -d "{\"model\":\"$id\",\"max_tokens\":1,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" \
+          | grep -q '"choices"' && print "OK $id (not listed in the catalog, but answers)" || print "GONE $id: not listed and doesn't answer"
+      else print -r -- "$st $rest"; fi
+    done
+  done
+}
+
+case $1 in
+on)
+  if [[ -z $CF_ACCOUNT_ID ]]; then
+    read "CF_ACCOUNT_ID?Cloudflare account ID (dashboard > right sidebar): "
+    [[ $CF_ACCOUNT_ID =~ '^[0-9a-f]{32}$' ]] || die "that doesn't look like a 32-character account ID"
+    print -r -- $'\n# Cloudflare Workers AI account (lumo-cloudflare). Unset = Lumo only.\nCF_ACCOUNT_ID='$CF_ACCOUNT_ID >> $LUMO_STACK/lumo.env
+  fi
+  if [[ $2 == --new-token || -z $(token) ]]; then
+    print "Paste the Workers AI API token (hidden), twice:"
+    /usr/bin/security add-generic-password -a "$USER" -s $ITEM -U -w || die "Keychain write failed"
+  fi
+  verify $CF_ACCOUNT_ID || die "Cloudflare rejected the token for account ${CF_ACCOUNT_ID[1,6]}…; rerun with --new-token"
+  cp -p $LITELLM_CFG $LITELLM_CFG.bak-$(date +%Y%m%d%H%M)
+  edit_cfg add && reload && print "Cloudflare models on. Smoke test:" && smoke ;;
+off)
+  cp -p $LITELLM_CFG $LITELLM_CFG.bak-$(date +%Y%m%d%H%M)
+  edit_cfg remove && reload && print "Cloudflare models removed; LiteLLM is Lumo-only."
+  if [[ $2 == --forget ]]; then
+    /usr/bin/security delete-generic-password -a "$USER" -s $ITEM >/dev/null 2>&1
+    sed -i '' -e '/^# Cloudflare Workers AI account/d' -e '/^CF_ACCOUNT_ID=/d' $LUMO_STACK/lumo.env
+    print "Token and account ID deleted."
+  fi ;;
+status)
+  [[ -n $CF_ACCOUNT_ID ]] && print "account ID : ${CF_ACCOUNT_ID[1,6]}… (lumo.env)" || print "account ID : not set"
+  if [[ -n $(token) ]]; then print -n "token      : in Keychain, "; verify ${CF_ACCOUNT_ID:-none} && print valid || print "REJECTED"; else print "token      : none"; fi
+  grep -q '# >>> cloudflare' $LITELLM_CFG && print "LiteLLM    : cf-* models on" || print "LiteLLM    : Lumo only"
+  /usr/libexec/PlistBuddy -c "Print :ProgramArguments:0" $PLIST 2>/dev/null | grep -qx "$START" && print "start.sh   : in use" || print "start.sh   : not in use (plist runs litellm directly)"
+  print "usage      : $(usage | tail -1)" ;;
+usage) usage ;;
+models) deprecations ;;
+*) sed -n '2,12p' $0 | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

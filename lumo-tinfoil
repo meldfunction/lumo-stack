@@ -1,0 +1,94 @@
+#!/bin/zsh
+# lumo-tinfoil — opt in to Tinfoil confidential inference (hardware enclaves + attestation).
+#
+#   lumo-tinfoil on [--new-key]   add tf-* models to LiteLLM (asks for the API key once)
+#   lumo-tinfoil off [--forget]   remove them (--forget also deletes the Keychain key)
+#   lumo-tinfoil status           proxy, attestation, key, LiteLLM state
+#
+# Requests go LiteLLM -> tinfoil-proxy (127.0.0.1:3301) -> Tinfoil enclave. The proxy verifies the
+# enclave's attestation at startup and TLS-pins to it, so Tinfoil's servers can't read prompts and
+# you don't have to take that on trust. Install the proxy first (macOS menu-bar app or CLI):
+#   https://github.com/tinfoilsh/tinfoil-proxy/releases  ->  Tinfoil-Proxy-arm64.pkg
+# The API key lives in the macOS Keychain (item "tinfoil-api"); nothing personal goes into the repo.
+# Fallbacks: tf-* -> lumo (private to private), never to Cloudflare.
+source ${0:A:h}/lib.zsh
+zmodload zsh/datetime
+ITEM=tinfoil-api PROXY=http://127.0.0.1:3301
+PLIST=~/Library/LaunchAgents/$(agent litellm).plist
+START=$LITELLM_DIR/start.sh
+die() { print -u2 "lumo-tinfoil: $*"; exit 1; }
+key()   { /usr/bin/security find-generic-password -a "$USER" -s $ITEM -w 2>/dev/null; }
+proxy_up() { curl -s -m 5 -o /dev/null -w "%{http_code}" $PROXY/v1/models -H "Authorization: Bearer $(key)" | grep -qE '^(200|401)$'; }
+
+edit_cfg() {  # edit_cfg add|remove
+  python3 - "$1" "$LITELLM_CFG" "$LUMO_STACK/templates/litellm-tinfoil.yaml" <<'PY'
+import re, sys
+mode, cfg, tpl = sys.argv[1:]
+s = open(cfg).read()
+s = re.sub(r"\n[ \t]*# >>> tinfoil \(managed[^\n]*\n[\s\S]*?# <<< tinfoil <<<[^\n]*", "", s)
+s = re.sub(r"\n[ \t]*# >>> tinfoil-fallbacks[^\n]*\n[\s\S]*?# <<< tinfoil-fallbacks <<<[^\n]*", "", s)
+s = re.sub(r"\n*# >>> tinfoil-router[^\n]*\n[\s\S]*?# <<< tinfoil-router <<<[^\n]*\n?", "\n", s)
+if mode == "add":
+    block = open(tpl).read().rstrip("\n")
+    if "\nlitellm_settings:" not in s:
+        sys.exit("config has no litellm_settings: section")
+    s = s.replace("\nlitellm_settings:", "\n" + block + "\n\nlitellm_settings:", 1)
+    fb = ("    # >>> tinfoil-fallbacks (managed by lumo-tinfoil) >>>\n"
+          "    - tf-gptoss: [tf-gemma4, lumo]\n    - tf-gemma4: [tf-gptoss, lumo]\n    - tf-llama: [tf-gptoss, lumo]\n"
+          "    # <<< tinfoil-fallbacks <<<")
+    m = re.search(r"\nrouter_settings:\n(?:[ \t]+[^\n]*\n)*?[ \t]+fallbacks:\n", s)
+    if m:
+        s = s[:m.end()] + fb + "\n" + s[m.end():]
+    elif "\nrouter_settings:" in s:
+        sys.exit("router_settings has no fallbacks: list; add the tinfoil fallbacks by hand")
+    else:
+        s = s.rstrip("\n") + ("\n\n# >>> tinfoil-router (managed by lumo-tinfoil) >>>\nrouter_settings:\n"
+                              "  num_retries: 1\n  timeout: 120\n  fallbacks:\n" + fb + "\n# <<< tinfoil-router <<<\n")
+s = re.sub(r"\n{3,}", "\n\n", s)
+open(cfg, "w").write(s)
+PY
+}
+reload() {  # always re-render start.sh so it exports TINFOIL_API_KEY
+  export LITELLM_DIR LUMO_STACK LABEL=$LUMO_LABEL LOG_DIR
+  render $LUMO_STACK/templates/litellm-start.sh $START && chmod 700 $START
+  if ! /usr/libexec/PlistBuddy -c "Print :ProgramArguments:0" $PLIST 2>/dev/null | grep -qx "$START"; then
+    render $LUMO_STACK/templates/launchagents/litellm.plist $PLIST
+    launchctl unload $PLIST 2>/dev/null; launchctl load $PLIST
+  else
+    launchctl kickstart -k gui/$(id -u)/$(agent litellm)
+  fi
+  for i in {1..45}; do curl -s -m 2 -o /dev/null http://127.0.0.1:$LITELLM_PORT/health/liveliness && return 0; sleep 2; done
+  die "LiteLLM didn't come back; see $LOG_DIR/litellm.log"
+}
+smoke() {
+  local k=$(litellm_key) m t0 r
+  for m in $(sed -n 's/^  - model_name: \(tf-[a-z0-9-]*\)$/\1/p' $LITELLM_CFG); do
+    t0=$EPOCHREALTIME
+    r=$(curl -s -m 120 http://127.0.0.1:$LITELLM_PORT/v1/chat/completions -H "Authorization: Bearer $k" -H "Content-Type: application/json" \
+      -d "{\"model\":\"$m\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly: ok\"}],\"max_tokens\":300}" \
+      | python3 -c "import json,sys; d=json.load(sys.stdin); print((d.get('choices') or [{}])[0].get('message',{}).get('content') or 'ERROR '+str(d.get('error',{}).get('message',''))[:100])")
+    printf "  %-10s %5.1fs  %s\n" $m $(( EPOCHREALTIME - t0 )) "$r"
+  done
+}
+
+case $1 in
+on)
+  proxy_up || die "tinfoil-proxy isn't answering on $PROXY. Install/start it first (see the header of this script)."
+  if [[ $2 == --new-key || -z $(key) ]]; then
+    print "Paste the Tinfoil API key (hidden), twice:"
+    /usr/bin/security add-generic-password -a "$USER" -s $ITEM -U -w || die "Keychain write failed"
+  fi
+  code=$(curl -s -m 20 -o /dev/null -w "%{http_code}" $PROXY/v1/models -H "Authorization: Bearer $(key)")
+  [[ $code == 200 ]] || die "proxy rejected the key (HTTP $code); rerun with --new-key"
+  cp -p $LITELLM_CFG $LITELLM_CFG.bak-$(date +%Y%m%d%H%M)
+  edit_cfg add && reload && print "Tinfoil models on. Smoke test:" && smoke ;;
+off)
+  cp -p $LITELLM_CFG $LITELLM_CFG.bak-$(date +%Y%m%d%H%M)
+  edit_cfg remove && reload && print "Tinfoil models removed."
+  [[ $2 == --forget ]] && /usr/bin/security delete-generic-password -a "$USER" -s $ITEM >/dev/null 2>&1 && print "Key deleted." ;;
+status)
+  proxy_up && print "proxy      : running on $PROXY (attestation verified at proxy start)" || print "proxy      : not running"
+  [[ -n $(key) ]] && print "key        : in Keychain" || print "key        : none"
+  grep -q '# >>> tinfoil (managed' $LITELLM_CFG && print "LiteLLM    : tf-* models on" || print "LiteLLM    : off" ;;
+*) sed -n '2,14p' $0 | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

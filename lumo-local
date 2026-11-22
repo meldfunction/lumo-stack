@@ -1,0 +1,110 @@
+#!/bin/zsh
+# lumo-local — opt in to local Ollama models as the private, offline last resort.
+#
+#   lumo-local on [--force]   add tool-capable local models to LiteLLM (needs LUMO_LOCAL_DRIVE mounted, if set)
+#   lumo-local off            remove them
+#   lumo-local status         Ollama, model drive, which installed models qualify
+#
+# Nothing leaves the Mac. Meant as an emergency fallback. If LUMO_LOCAL_DRIVE is set (in lumo.env,
+# e.g. an external SSD), models live there and `on` refuses unless it's mounted (--force overrides). Only models that are already pulled AND
+# list "tools" in `ollama show` are added — Claude Code can't work without tool calls.
+# Routing stays through LiteLLM (never call Ollama directly). Local becomes the LAST fallback
+# for lumo and the cf-* models. Use: lumo-ask -m local-llama "…"  /  LUMO_TOOL_MODEL=local-llama claude-lumo
+source ${0:A:h}/lib.zsh
+zmodload zsh/datetime
+OLLAMA=http://127.0.0.1:11434
+DRIVE=${LUMO_LOCAL_DRIVE:-}   # optional external drive holding the models
+PLIST=~/Library/LaunchAgents/$(agent litellm).plist
+NUM_CTX=${LUMO_LOCAL_CTX:-16384}   # lean Claude Code needs ~1-6k; full needs ~20k+
+# alias  ollama-tag  (US/EU-origin only; first installed + tool-capable wins per alias)
+CANDIDATES=(
+  local-llama    llama3.1:8b
+  local-nemo     mistral-nemo:12b
+  local-gemma4   gemma4:12b
+  local-gemma4s  gemma4:e4b
+)
+die() { print -u2 "lumo-local: $*"; exit 1; }
+ollama_up() { curl -s -m 3 -o /dev/null $OLLAMA/api/tags; }
+has_tools() { ollama show "$1" 2>/dev/null | sed -n '/Capabilities/,/^$/p' | grep -qw tools; }
+installed() { ollama list 2>/dev/null | awk 'NR>1{print $1}' | grep -qx "$1"; }
+qualifying() {  # prints "alias tag" for each usable model
+  local i
+  for (( i = 1; i <= $#CANDIDATES; i += 2 )); do
+    installed $CANDIDATES[i+1] && has_tools $CANDIDATES[i+1] && print -r -- "$CANDIDATES[i] $CANDIDATES[i+1]"
+  done
+}
+
+edit_cfg() {  # edit_cfg add|remove ; models for add come from $LOCAL_MODELS ("alias tag" lines)
+  LOCAL_MODELS=$LOCAL_MODELS python3 - "$1" "$LITELLM_CFG" "$NUM_CTX" <<'PY'
+import os, re, sys
+mode, cfg, ctx = sys.argv[1:4]
+s = open(cfg).read()
+s = re.sub(r"\n[ \t]*# >>> local \(managed[^\n]*\n[\s\S]*?# <<< local <<<[^\n]*", "", s)
+s = re.sub(r"\n[ \t]*# >>> local-fallbacks[^\n]*\n[\s\S]*?# <<< local-fallbacks <<<[^\n]*", "", s)
+s = re.sub(r"\n*# >>> local-router[^\n]*\n[\s\S]*?# <<< local-router <<<[^\n]*\n?", "\n", s)
+# strip ", local-*" entries we appended to existing fallback lists
+s = re.sub(r", local-[a-z0-9]+(?=[,\]])", "", s)
+if mode == "add":
+    models = [l.split() for l in os.environ.get("LOCAL_MODELS", "").splitlines() if l.strip()]
+    if not models:
+        sys.exit("no qualifying models")
+    block = ["  # >>> local (managed by lumo-local; remove with `lumo-local off`) >>>",
+             "  # Ollama on this Mac. Nothing leaves the machine. Emergency / offline use."]
+    for alias, tag in models:
+        block += [f"  - model_name: {alias}", "    litellm_params:", f"      model: ollama_chat/{tag}",
+                  "      api_base: http://127.0.0.1:11434", f"      num_ctx: {ctx}"]
+    block.append("  # <<< local <<<")
+    s = s.replace("\nlitellm_settings:", "\n" + "\n".join(block) + "\n\nlitellm_settings:", 1)
+    first = models[0][0]
+    # append the first local model as last resort to every existing fallback list
+    s = re.sub(r"^(    - (?:cf|tf)-[a-z0-9]+: \[[^\]]*)\]", lambda m: m.group(1) + f", {first}]", s, flags=re.M)
+    fb = (f"    # >>> local-fallbacks (managed by lumo-local) >>>\n"
+          f"    - lumo: [lumo-lite, {first}]\n    - lumo-max: [lumo, {first}]\n    - lumo-lite: [{first}]\n"
+          f"    # <<< local-fallbacks <<<")
+    m = re.search(r"\nrouter_settings:\n(?:[ \t]+[^\n]*\n)*?[ \t]+fallbacks:\n", s)
+    if m:
+        s = s[:m.end()] + fb + "\n" + s[m.end():]
+    else:
+        s = s.rstrip("\n") + ("\n\n# >>> local-router (managed by lumo-local) >>>\nrouter_settings:\n"
+                              "  num_retries: 1\n  timeout: 180\n  fallbacks:\n" + fb + "\n# <<< local-router <<<\n")
+s = re.sub(r"\n{3,}", "\n\n", s)
+open(cfg, "w").write(s)
+PY
+}
+reload() {
+  launchctl kickstart -k gui/$(id -u)/$(agent litellm)
+  for i in {1..45}; do curl -s -m 2 -o /dev/null http://127.0.0.1:$LITELLM_PORT/health/liveliness && return 0; sleep 2; done
+  die "LiteLLM didn't come back; see $LOG_DIR/litellm.log"
+}
+smoke() {
+  local k=$(litellm_key) m t0 r
+  for m in $(sed -n 's/^  - model_name: \(local-[a-z0-9]*\)$/\1/p' $LITELLM_CFG); do
+    t0=$EPOCHREALTIME
+    r=$(curl -s -m 180 http://127.0.0.1:$LITELLM_PORT/v1/chat/completions -H "Authorization: Bearer $k" -H "Content-Type: application/json" \
+      -d "{\"model\":\"$m\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly: ok\"}],\"max_tokens\":20}" \
+      | python3 -c "import json,sys; d=json.load(sys.stdin); print((d.get('choices') or [{}])[0].get('message',{}).get('content') or 'ERROR '+str(d.get('error',{}).get('message',''))[:100])")
+    printf "  %-13s %5.1fs  %s   (first call includes loading the model into RAM)\n" $m $(( EPOCHREALTIME - t0 )) "$r"
+  done
+}
+
+case $1 in
+on)
+  [[ -z $DRIVE || -d $DRIVE || $2 == --force ]] || die "model drive not mounted at $DRIVE — local models live there (--force to override)"
+  ollama_up || die "Ollama isn't running on $OLLAMA"
+  q=$(qualifying)
+  [[ -n $q ]] || die "no installed model has tool support. Pull one, e.g.:
+    OLLAMA_MODELS=${DRIVE:+$DRIVE/}ollama-models ollama pull llama3.1:8b"
+  print "Qualifying models:"; print -r -- "$q" | sed 's/^/  /'
+  cp -p $LITELLM_CFG $LITELLM_CFG.bak-$(date +%Y%m%d%H%M)
+  LOCAL_MODELS=$q edit_cfg add && reload && print "Local models on (num_ctx=$NUM_CTX). Smoke test:" && smoke ;;
+off)
+  cp -p $LITELLM_CFG $LITELLM_CFG.bak-$(date +%Y%m%d%H%M)
+  edit_cfg remove && reload && print "Local models removed." ;;
+status)
+  [[ -z $DRIVE ]] && print "drive      : none set" || { [[ -d $DRIVE ]] && print "drive      : mounted ($DRIVE)" || print "drive      : not mounted"; }
+  ollama_up && print "Ollama     : running ($(ollama --version 2>/dev/null | awk '{print $NF}'))" || print "Ollama     : not running"
+  print "installed  : $(ollama list 2>/dev/null | awk 'NR>1{printf "%s ", $1}')"
+  q=$(qualifying); print "qualify    : ${q:-none (need a tool-capable model: llama3.1:8b, mistral-nemo:12b, gemma4:12b, gemma4:e4b)}"
+  grep -q '# >>> local (managed' $LITELLM_CFG && print "LiteLLM    : local-* models on" || print "LiteLLM    : off" ;;
+*) sed -n '2,13p' $0 | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

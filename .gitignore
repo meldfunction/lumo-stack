@@ -10,3 +10,5 @@ vendor/
 litellm/
 # macOS
 .DS_Store
+# Local backups
+*.bak-*

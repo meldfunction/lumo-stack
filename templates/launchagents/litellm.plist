@@ -3,10 +3,7 @@
 <plist version="1.0"><dict>
   <key>Label</key><string>{{LABEL}}.litellm</string>
   <key>ProgramArguments</key><array>
-    <string>{{LITELLM_DIR}}/venv/bin/litellm</string>
-    <string>--config</string><string>{{LITELLM_DIR}}/config.yaml</string>
-    <string>--host</string><string>127.0.0.1</string>
-    <string>--port</string><string>4000</string>
+    <string>{{LITELLM_DIR}}/start.sh</string>
   </array>
   <key>WorkingDirectory</key><string>{{LITELLM_DIR}}</string>
   <key>RunAtLoad</key><true/>

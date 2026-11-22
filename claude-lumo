@@ -10,14 +10,19 @@ die() { log "ABORT: $*"; print -u2 "claude-lumo: $*"; exit 1; }
 command -v claude >/dev/null || die "Claude Code isn't installed (https://claude.com/claude-code)"
 log "launch: cwd=$PWD args=$*"
 
-# 1. LiteLLM may only route to lumo-tamer on localhost.
+# 1. LiteLLM may only route to lumo-tamer on localhost, or to Cloudflare Workers AI
+#    on this account with an allowlisted (US/EU-origin) model. Anything else aborts.
 [[ -r $LITELLM_CFG ]] || die "missing $LITELLM_CFG"
 cfg=$(grep -vE '^\s*#' $LITELLM_CFG)
-[[ $(print -r -- "$cfg" | grep -E '^\s*api_base:' | sed 's/^ *//' | sort -u) == "api_base: http://127.0.0.1:$TAMER_PORT/v1" ]] \
-  || die "LiteLLM config routes somewhere other than lumo-tamer"
-print -r -- "$cfg" | grep -E '^\s*model:' | grep -qvE 'model: openai/lumo(-max|-lite)?$' && die "LiteLLM config has a non-Lumo model"
-print -r -- "$cfg" | grep -qiE 'anthropic|claude' && die "LiteLLM config mentions anthropic/claude"
-log "check: LiteLLM routes only to lumo-tamer"
+CF_BASE="https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID:-none}/ai/v1"  # account from lumo.env
+print -r -- "$cfg" | grep -E '^\s*api_base:' | sed 's/^ *//' | sort -u \
+  | grep -qvxF -e "api_base: http://127.0.0.1:$TAMER_PORT/v1" -e "api_base: $CF_BASE" -e "api_base: http://127.0.0.1:3301/v1" -e "api_base: http://127.0.0.1:11434" \
+  && die "LiteLLM config routes somewhere other than lumo-tamer, Cloudflare Workers AI, tinfoil-proxy or local Ollama"
+print -r -- "$cfg" | grep -E '^\s*model:' | grep -qvE 'model: (ollama_chat/(llama3\.1:8b|mistral-nemo:12b|gemma4:12b|gemma4:e4b)|openai/(lumo(-max|-lite)?|@cf/meta/llama-4-scout-17b-16e-instruct|@cf/mistralai/mistral-small-3\.1-24b-instruct|@cf/meta/llama-3\.3-70b-instruct-fp8-fast|@cf/meta/llama-3\.1-8b-instruct-fast|@cf/openai/gpt-oss-120b|@cf/google/gemma-4-26b-a4b-it|gpt-oss-120b|gemma4-31b|llama3-3-70b))$' \
+  && die "LiteLLM config has a model outside the Lumo + Cloudflare allowlist"
+# (the one allowed mention is LiteLLM's own setting name for the chat/completions translation)
+print -r -- "$cfg" | grep -vxE '\s*use_chat_completions_url_for_anthropic_messages: true' | grep -qiE 'anthropic|claude' && die "LiteLLM config mentions anthropic/claude"
+log "check: LiteLLM routes only to lumo-tamer + Cloudflare allowlist"
 
 # 2. Servers up (starts them if needed).
 ${0:A:h}/lumo-up || die "stack didn't come up"
@@ -28,15 +33,24 @@ export ANTHROPIC_BASE_URL=http://localhost:$LITELLM_PORT
 export ANTHROPIC_AUTH_TOKEN=$(litellm_key)
 [[ -n $ANTHROPIC_AUTH_TOKEN ]] || die "no master_key in $LITELLM_CFG"
 export ANTHROPIC_MODEL=lumo ANTHROPIC_DEFAULT_OPUS_MODEL=lumo-max ANTHROPIC_DEFAULT_SONNET_MODEL=lumo
-export ANTHROPIC_DEFAULT_HAIKU_MODEL=lumo-lite ANTHROPIC_SMALL_FAST_MODEL=lumo-lite CLAUDE_CODE_SUBAGENT_MODEL=lumo
-# Lumo's real window is unknown; set LUMO_CONTEXT_TOKENS to cap it.
-[[ -n $LUMO_CONTEXT_TOKENS ]] && export CLAUDE_CODE_MAX_CONTEXT_TOKENS=$LUMO_CONTEXT_TOKENS
+# Pairing: Lumo reasons; a Cloudflare model with reliable tool calls does subagent/tool-heavy work.
+# LUMO_TOOL_MODEL=lumo restores Lumo-only.
+TOOL_MODEL=${LUMO_TOOL_MODEL:-cf-gptoss}  # best in lean harness 2026-11-20 (3/3, 21s)
+export ANTHROPIC_DEFAULT_HAIKU_MODEL=$TOOL_MODEL ANTHROPIC_SMALL_FAST_MODEL=$TOOL_MODEL CLAUDE_CODE_SUBAGENT_MODEL=$TOOL_MODEL
+# Lumo's real window is unknown; cap it so Claude Code compacts before Lumo truncates.
+export CLAUDE_CODE_MAX_CONTEXT_TOKENS=${LUMO_CONTEXT_TOKENS:-100000}
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 DISABLE_AUTOUPDATER=1 DISABLE_TELEMETRY=1 DISABLE_ERROR_REPORTING=1
 
 # 4. No MCP servers (they open their own connections). LUMO_KEEP_MCP=1 keeps them.
 mcp=(--strict-mcp-config); [[ $LUMO_KEEP_MCP == 1 ]] && mcp=()
-log "start: model=lumo ctx=${CLAUDE_CODE_MAX_CONTEXT_TOKENS:-default} mcp=${mcp:-kept}"
-claude "${mcp[@]}" "$@"
+
+# 5. Lean by default: no hooks/plugins/CLAUDE.md, 6 tools, a nudge to make real tool calls.
+#    ~10x less input per turn -> faster Lumo, fewer Cloudflare neurons. LUMO_FULL=1 = full Claude Code.
+lean=(--bare --tools "Read,Write,Edit,Grep,Glob,Bash"
+      --append-system-prompt "Make real tool calls; never write a tool call as text or JSON in your reply. When editing, prefer writing the whole file if an exact-match edit fails.")
+[[ $LUMO_FULL == 1 ]] && lean=()
+log "start: model=lumo tool=$TOOL_MODEL ctx=$CLAUDE_CODE_MAX_CONTEXT_TOKENS mcp=${mcp:-kept} mode=${${lean:+lean}:-full}"
+claude "${mcp[@]}" "${lean[@]}" "$@"
 code=$?
 log "exit: code=$code"
 exit $code

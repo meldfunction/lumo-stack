@@ -1,0 +1,19 @@
+  # >>> tinfoil (managed by lumo-tinfoil; remove with `lumo-tinfoil off`) >>>
+  # Tinfoil confidential inference via the local tinfoil-proxy, which verifies the enclave's
+  # attestation and TLS-pins to it. Only US/EU-origin models. Key from the Keychain via start.sh.
+  - model_name: tf-gptoss
+    litellm_params:
+      model: openai/gpt-oss-120b
+      api_base: http://127.0.0.1:3301/v1
+      api_key: os.environ/TINFOIL_API_KEY
+  - model_name: tf-gemma4
+    litellm_params:
+      model: openai/gemma4-31b
+      api_base: http://127.0.0.1:3301/v1
+      api_key: os.environ/TINFOIL_API_KEY
+  - model_name: tf-llama
+    litellm_params:
+      model: openai/llama3-3-70b
+      api_base: http://127.0.0.1:3301/v1
+      api_key: os.environ/TINFOIL_API_KEY
+  # <<< tinfoil <<<

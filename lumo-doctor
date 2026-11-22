@@ -30,11 +30,13 @@ r=$(curl -s -m 90 http://127.0.0.1:$TAMER_PORT/v1/chat/completions -H "Authoriza
   -d '{"model":"lumo","messages":[{"role":"user","content":"Reply with exactly: ok"}]}' | python3 -c "import json,sys; print(json.load(sys.stdin)['choices'][0]['message']['content'])" 2>/dev/null)
 [[ -n $r ]] && ok "Lumo answers a test message" || bad "Lumo didn't answer a test message" "network to Proton? lumo login?"
 
-print "\nRouting (Lumo only)"
+print "\nRouting (Lumo + opt-in Cloudflare / Tinfoil / local)"
 cfg=$(grep -vE '^\s*#' $LITELLM_CFG)
-[[ $(print -r -- "$cfg" | grep -E '^\s*api_base:' | sed 's/^ *//' | sort -u) == "api_base: http://127.0.0.1:$TAMER_PORT/v1" ]] \
-  && ok "LiteLLM routes only to lumo-tamer" || bad "LiteLLM routes somewhere else" "$LITELLM_CFG"
-print -r -- "$cfg" | grep -qiE 'anthropic|claude' && bad "LiteLLM config mentions anthropic/claude" || ok "no Anthropic routes in LiteLLM"
+CF_BASE="https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID:-none}/ai/v1"  # account from lumo.env
+print -r -- "$cfg" | grep -E '^\s*api_base:' | sed 's/^ *//' | sort -u \
+  | grep -qvxF -e "api_base: http://127.0.0.1:$TAMER_PORT/v1" -e "api_base: $CF_BASE" -e "api_base: http://127.0.0.1:3301/v1" -e "api_base: http://127.0.0.1:11434" \
+  && bad "LiteLLM routes somewhere else" "$LITELLM_CFG" || ok "LiteLLM routes only to lumo-tamer + opt-in Cloudflare / Tinfoil / local Ollama"
+print -r -- "$cfg" | grep -vxE '\s*use_chat_completions_url_for_anthropic_messages: true' | grep -qiE 'anthropic|claude' && bad "LiteLLM config mentions anthropic/claude" || ok "no Anthropic routes in LiteLLM"
 grep -q '"baseURL": "http://lumo-relay:4000/v1"' $STACK/opencode.json && ok "OpenCode routes only to the relay" || bad "OpenCode baseURL changed" "$STACK/opencode.json"
 grep -q "listen(this.serverConfig.port, '127.0.0.1'" $TAMER_DIR/src/api/server.ts && ok "lumo-tamer bound to localhost" || bad "lumo-tamer not bound to localhost" "re-apply patches/lumo-tamer-localhost.patch"
 docker port lumo-webui 2>/dev/null | grep -qv '127.0.0.1' && bad "Open WebUI published beyond localhost" || ok "Open WebUI published on localhost only"
@@ -56,6 +58,41 @@ for p in /etc/lumo-probe /usr/bin/lumo-probe /lumo-probe /lumo/inbox/lumo-probe 
 done
 print -r -- "$probe" | grep -q "^W /lumo/out/.lumo-probe$" && ok "writable: /lumo/out (as intended)" || bad "can't write /lumo/out"
 print -r -- "$probe" | grep -q "^W relay$" && ok "reaches Lumo via relay" || bad "can't reach the relay"
+
+if grep -q '# >>> cloudflare' $LITELLM_CFG 2>/dev/null || grep -q 'cloudflare.com' $LITELLM_CFG 2>/dev/null; then
+  print "\nCloudflare Workers AI (opt-in)"
+  cf=${0:A:h}/lumo-cloudflare
+  $cf status 2>/dev/null | grep -q "token      : in Keychain, valid" && ok "token in Keychain is valid" || bad "Cloudflare token missing or rejected" "lumo-cloudflare on --new-token"
+  while read -r st rest; do
+    case $st in OK) ok "$rest" ;; SOON) meh "retiring soon" "$rest" ;; *) bad "$st $rest" "replace it in templates/litellm-cloudflare.yaml, then lumo-cloudflare on" ;; esac
+  done < <($cf models 2>/dev/null)
+  u=$($cf usage 2>/dev/null | tail -1); pct=${${u##*= }%\%}
+  if [[ $pct == <-> ]]; then (( pct < 80 )) && ok "neurons today: ${u#TOTAL }" || meh "neuron budget ≥80% used" "${u#TOTAL }"; else meh "neuron usage unavailable"; fi
+fi
+
+print "\nEncryption to Proton"
+src=$TAMER_DIR/src/lumo-client/client.ts
+# Default must be "on", and the only place that turns it off must be mock/test mode.
+offenders=$(/usr/bin/grep -rn -B1 'enableEncryption: *false' $TAMER_DIR/src 2>/dev/null | /usr/bin/grep -c 'enableEncryption: *false')
+mockonly=$(/usr/bin/grep -rn -B1 'enableEncryption: *false' $TAMER_DIR/src 2>/dev/null | /usr/bin/grep -c 'createMockProtonApi')
+if grep -q 'enableEncryption = this.defaultOptions?.enableEncryption ?? true' $src 2>/dev/null && (( offenders == mockonly )) \
+   && grep -q 'new LumoClient(this.protonApi);' $TAMER_DIR/src/app/index.ts 2>/dev/null; then
+  ok "U2L message encryption on (default true; only mock mode disables it)"
+else bad "lumo-tamer may send requests without U2L encryption" "check enableEncryption in $TAMER_DIR/src"; fi
+
+if grep -q '# >>> tinfoil (managed' $LITELLM_CFG 2>/dev/null; then
+  print "\nTinfoil confidential inference (opt-in)"
+  ${0:A:h}/lumo-tinfoil status 2>/dev/null | grep -q "proxy      : running" && ok "tinfoil-proxy running (attested + TLS-pinned)" || bad "tinfoil-proxy not running" "start the Tinfoil Proxy app"
+  ${0:A:h}/lumo-tinfoil status 2>/dev/null | grep -q "key        : in Keychain" && ok "Tinfoil key in Keychain" || bad "no Tinfoil key" "lumo-tinfoil on --new-key"
+fi
+
+if grep -q '# >>> local (managed' $LITELLM_CFG 2>/dev/null; then
+  print "\nLocal models (opt-in, emergency)"
+  st=$(${0:A:h}/lumo-local status 2>/dev/null)
+  print -r -- "$st" | grep -q "Ollama     : running" && ok "Ollama running" || bad "Ollama not running" "local fallback will fail"
+  print -r -- "$st" | grep -q "drive      : not mounted" && meh "model drive not mounted" "local models may be missing" || ok "model drive ok"
+  print -r -- "$st" | grep -q "qualify    : none" && bad "no tool-capable local model installed" "lumo-local status" || ok "tool-capable local model installed"
+fi
 
 print "\nLogs (last hour)"
 errs=$(find $LOG_DIR \( -name 'lumo*.log' -o -name 'litellm.log' \) -newermt '-1 hour' 2>/dev/null | xargs grep -hiE 'ABORT|ERROR|Traceback' 2>/dev/null | grep -v 'fetch failed' | tail -3)

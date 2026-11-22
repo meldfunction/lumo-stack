@@ -175,6 +175,9 @@ else
   LITELLM_KEY="sk-$(key)"; ( umask 077; render $LUMO_STACK/templates/litellm-config.yaml $LITELLM_CFG )
   note "config.yaml written (routes only to lumo-tamer)"
 fi
+# start.sh launches LiteLLM; it adds the Cloudflare key from the Keychain only after `lumo-cloudflare on`.
+( export LITELLM_DIR LUMO_STACK; render $LUMO_STACK/templates/litellm-start.sh $LITELLM_DIR/start.sh ) && run chmod 700 $LITELLM_DIR/start.sh
+note "start.sh written (Lumo only unless lumo-cloudflare on)"
 
 # --- 6. Background services (LaunchAgents) -----------------------------------
 step "Background services"

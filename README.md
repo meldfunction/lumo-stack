@@ -105,7 +105,11 @@ It's all just `lumo`. Every command starts whatever's asleep first, and keeps a 
 | `lumo code-web` | The coding agent in your browser, password-protected |
 | `lumo web` | Chat in Open WebUI |
 | `lumo ask "…"` / `lumo chat` | Quick answer / plain terminal chat |
-| `claude-lumo` | Claude Code on Lumo (optional add-on) |
+| `claude-lumo` | Claude Code on Lumo (optional add-on). Lean by default; `LUMO_FULL=1` for the full setup |
+| `lumo-ask "…" files…` | One request, no agent loop: files pasted with line numbers, temperature 0. `--write f --check "cmd"` fixes a file and retries once if the check fails. Fastest and most accurate in benchmarks |
+| `lumo-cloudflare on\|off\|status\|usage\|models` | Opt-in: add Cloudflare Workers AI models (US/EU-origin only). Token in the Keychain, account ID in `lumo.env` |
+| `lumo-local on\|off\|status` | Opt-in, emergency: tool-capable Ollama models (optionally on an external drive, `LUMO_LOCAL_DRIVE`) as the private last-resort fallback. Nothing leaves the Mac |
+| `lumo-tinfoil on\|off\|status` | Opt-in: add Tinfoil confidential inference (hardware enclaves, attestation checked by the local tinfoil-proxy). Falls back to Lumo, never to Cloudflare |
 | `lumo import` / `lumo fetch <url>` / `lumo export` | Move files into and out of the jail |
 | `lumo snapshots` / `lumo restore` | List undo points, then rewind (the rewind is undoable too) |
 | `lumo home` | Dashboard: status, one-click Proton sign-in, files, chat, code |

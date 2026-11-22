@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""
+lumo-ask — one request, no agent loop. Fastest and most reliable way to ask a model
+about files (benchmark: direct API passed 10/11 tasks with Lumo).
+
+  lumo-ask "question" file1 [file2 ...]                 # answer printed
+  lumo-ask -m cf-gptoss "question" files...             # other model (Lumo + Cloudflare allowlist)
+  lumo-ask --write out.py "make X" [context files...]   # model returns a whole file -> saved
+  lumo-ask --write f.py --check "python3 f.py" "fix the bug" f.py
+                                                        # run check; on failure feed the error back once
+
+Files are pasted with line numbers. temperature 0, capped max_tokens.
+Goes through LiteLLM :4000, so the secrets filter and model allowlist apply.
+"""
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.request
+
+BASE = "http://127.0.0.1:4000/v1/chat/completions"
+CFG = os.path.expanduser("~/.litellm/config.yaml")
+MAX_FILE = 200_000  # bytes per file
+
+
+def key():
+    for line in open(CFG):
+        if line.strip().startswith("master_key:"):
+            return line.split(":", 1)[1].strip().strip('"')
+    sys.exit("lumo-ask: no master_key in " + CFG)
+
+
+def numbered(path):
+    data = open(path, encoding="utf-8", errors="replace").read()
+    if len(data) > MAX_FILE:
+        sys.exit(f"lumo-ask: {path} is over {MAX_FILE // 1000} KB; pass a smaller file or excerpt")
+    lines = data.splitlines()
+    w = len(str(len(lines)))
+    return f"--- {path} ({len(lines)} lines; line numbers added, not part of the file) ---\n" + \
+        "\n".join(f"{i:>{w}}| {l}" for i, l in enumerate(lines, 1))
+
+
+def ask(model, messages, max_tokens):
+    body = json.dumps({"model": model, "messages": messages, "temperature": 0, "max_tokens": max_tokens}).encode()
+    req = urllib.request.Request(BASE, body, {"Content-Type": "application/json", "Authorization": f"Bearer {key()}"})
+    try:
+        with urllib.request.urlopen(req, timeout=300) as r:
+            return json.load(r)["choices"][0]["message"].get("content") or ""
+    except urllib.error.HTTPError as e:
+        sys.exit(f"lumo-ask: {e.code} {e.read().decode(errors='replace')[:300]}")
+
+
+def code_block(text):
+    blocks = re.findall(r"```[^\n]*\n([\s\S]*?)```", text)
+    return max(blocks, key=len) if blocks else None
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("-m", "--model", default=os.environ.get("LUMO_ASK_MODEL", "lumo"))
+    ap.add_argument("--write", metavar="FILE", help="save the model's whole-file answer here")
+    ap.add_argument("--check", metavar="CMD", help="shell command that must succeed after --write; one retry on failure")
+    ap.add_argument("--max-tokens", type=int, default=4000)
+    ap.add_argument("question")
+    ap.add_argument("files", nargs="*")
+    a = ap.parse_args()
+    if a.check and not a.write:
+        sys.exit("lumo-ask: --check needs --write")
+
+    parts = [a.question] + [numbered(f) for f in a.files]
+    if a.write:
+        parts.append(f"Reply with ONLY the complete content of {a.write} in one fenced code block. "
+                     "No line numbers in your output.")
+    messages = [{"role": "system", "content": "Be accurate and brief. When asked for a file, output the whole file."},
+                {"role": "user", "content": "\n\n".join(parts)}]
+    out = ask(a.model, messages, a.max_tokens)
+    if not a.write:
+        print(out)
+        return
+
+    for attempt in (1, 2):
+        block = code_block(out)
+        if block is None:
+            sys.exit("lumo-ask: model didn't return a code block:\n" + out[:500])
+        with open(a.write, "w", encoding="utf-8") as f:
+            f.write(block)
+        if not a.check:
+            print(f"wrote {a.write}")
+            return
+        r = subprocess.run(a.check, shell=True, capture_output=True, text=True, timeout=120)
+        if r.returncode == 0:
+            print(f"wrote {a.write}; check passed" + (" after one retry" if attempt == 2 else ""))
+            return
+        if attempt == 2:
+            sys.exit(f"lumo-ask: check still failing after retry:\n{(r.stdout + r.stderr)[-800:]}")
+        messages += [{"role": "assistant", "content": out},
+                     {"role": "user", "content": f"`{a.check}` failed:\n```\n{(r.stdout + r.stderr)[-2000:]}\n```\n"
+                                                 f"Fix it. Reply with ONLY the complete corrected {a.write} in one code block."}]
+        out = ask(a.model, messages, a.max_tokens)
+
+
+if __name__ == "__main__":
+    main()
