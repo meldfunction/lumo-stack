@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""
+lumo-statusline — Claude Code status line: capacity LEFT on each source, refreshed every turn.
+
+  Claude 5h ██████░░ 58 left │ 7d ███████░ 74 │ lumo ok
+
+Setup (per Claude Code account), in that account's settings.json:
+  "statusLine": {"type": "command", "command": "~/lumo-stack/lumo-statusline", "padding": 0}
+
+Optional settings: <config dir>/lumo-statusline.json  (config dir = $CLAUDE_CONFIG_DIR or ~/.claude)
+  {
+    "name": "work",                       label for this account (default: config dir name)
+    "show_others": false,                 admin view: also show other accounts' limits
+    "others": {"personal": "~/.claude-personal"}   label -> that account's config dir
+  }
+Each account saves its own limits to <config dir>/lumo-statusline-limits.json when it runs, so the
+admin view reads the others locally; nothing is sent anywhere. Other accounts' numbers are only as
+fresh as their last turn (shown as "3h ago" when older than an hour).
+No network except a 0.3 s local health check of the Lumo proxy; stays well under 100 ms.
+"""
+import json, os, sys, time, urllib.request
+
+HOME = os.path.expanduser("~")
+CFG = os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude")
+LIMITS = "lumo-statusline-limits.json"
+TAMER_PORT = os.environ.get("TAMER_PORT", "3003")
+DIM, RST, AMB, RED, GRN, BLD = "\033[2m", "\033[0m", "\033[33m", "\033[31m", "\033[32m", "\033[1m"
+
+
+def col(left):
+    return RED if left < 25 else AMB if left < 60 else GRN
+
+
+def bar(left, n=8):
+    k = max(0, min(n, round(left * n / 100)))
+    return f"{col(left)}{'█' * k}{DIM}{'█' * (n - k)}{RST}"
+
+
+def pct(v):
+    if isinstance(v, dict):
+        for k in ("used_percentage", "utilization", "percent", "used"):
+            if k in v:
+                return pct(v[k])
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def settings():
+    try:
+        return json.load(open(os.path.join(CFG, "lumo-statusline.json")))
+    except Exception:
+        return {}
+
+
+def main():
+    try:
+        d = json.load(sys.stdin)
+    except Exception:
+        d = {}
+    s = settings()
+    rl = d.get("rate_limits") or {}
+    five, week = pct(rl.get("five_hour")), pct(rl.get("seven_day"))
+    if five is not None or week is not None:
+        try:
+            json.dump({"five_hour": five, "seven_day": week, "at": int(time.time())}, open(os.path.join(CFG, LIMITS), "w"))
+        except OSError:
+            pass
+    name = s.get("name") or os.path.basename(CFG.rstrip("/")).lstrip(".") or "claude"
+    model = (d.get("model") or {}).get("display_name", "") if isinstance(d.get("model"), dict) else ""
+    parts = [f"{BLD}{name}{RST}" + (f" {DIM}{model.lower()}{RST}" if model else "")]
+    if five is not None:
+        parts.append(f"5h {bar(100 - five)} {100 - round(five)} left")
+    if week is not None:
+        parts.append(f"7d {bar(100 - week)} {100 - round(week)}")
+    if s.get("show_others"):
+        for label, path in (s.get("others") or {}).items():
+            try:
+                o = json.load(open(os.path.join(os.path.expanduser(path), LIMITS)))
+            except Exception:
+                continue
+            if o.get("five_hour") is None:
+                continue
+            age = time.time() - o.get("at", 0)
+            seg = f"{label} 5h {col(100 - o['five_hour'])}{100 - round(o['five_hour'])}{RST}"
+            if o.get("seven_day") is not None:
+                seg += f" 7d {col(100 - o['seven_day'])}{100 - round(o['seven_day'])}{RST}"
+            parts.append(seg + (f" {DIM}{int(age // 3600)}h ago{RST}" if age > 3600 else ""))
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:{TAMER_PORT}/health", timeout=0.3)
+        parts.append(f"lumo {GRN}ok{RST}")
+    except Exception:
+        parts.append(f"{RED}lumo down{RST} {DIM}(lumo signin){RST}")
+    print(f" {DIM}│{RST} ".join(parts))
+
+
+main()
