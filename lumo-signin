@@ -1,16 +1,15 @@
 #!/bin/zsh
-# lumo-signin — sign lumo-tamer in with its OWN Proton session (the "login" method).
-# The browser method (lumo-login) borrows your browser's session, and the two can invalidate
-# each other's refresh token ("Invalid refresh token", code 10013). This one gets a separate
-# session, so lumo-tamer's auto-refresh keeps it alive.
-# Asks for your Proton email, password and 2FA in this terminal; the password is not stored.
-# Needs Go once to build the helper: brew install go && (cd $TAMER_DIR && npm run build:login)
-# Trade-offs: no CAPTCHA support (log in at proton.me in a browser first if you hit one) and no
-# Lumo conversation sync.
+# lumo-signin — sign lumo-bridge in with Proton's password login (no browser needed).
+# Asks for your Proton email, password, second password (if your account uses one) and the
+# authenticator code in this terminal; the passwords are not stored.
+# If Proton asks for a CAPTCHA, which this login can't show, it switches to lumo-login
+# (the browser sign-in) automatically.
+# Needs Go once to build the helper: brew install go
 emulate -L zsh
 source ${0:A:h}/lib.zsh
 STATE=$LUMO_STACK/.login-state
 state() { print -r -- "$1|$2|$(date +%s)" > $STATE; print -r -- "$2"; }
+valid() { (cd $TAMER_DIR && node dist/src/tamer.js auth status 2>&1) | grep -q "configured and valid"; }
 trap 'state failed "Sign-in cancelled."; exit 1' INT TERM
 
 if [[ ! -x $TAMER_DIR/dist/proton-auth ]]; then
@@ -19,13 +18,20 @@ if [[ ! -x $TAMER_DIR/dist/proton-auth ]]; then
   (cd $TAMER_DIR && npm run build:login) || { state failed "Couldn't build the login helper."; exit 1; }
 fi
 state waiting "Sign in to Proton below."
-(cd $TAMER_DIR && node dist/src/tamer.js auth login) || { state failed "Proton sign-in failed. If you hit a CAPTCHA, log in at proton.me in a browser first, then retry."; exit 1; }
-state saving "Signed in. Restarting lumo-tamer..."
+log=$(mktemp)
+# `script` records the session (to spot a CAPTCHA) while keeping the terminal interactive
+script -q $log zsh -c "cd ${(q)TAMER_DIR} && node dist/src/tamer.js auth login"
+if grep -q "Code=9001\|CAPTCHA" $log; then
+  rm -f $log; state waiting "Proton asked for a CAPTCHA. Switching to the browser sign-in..."
+  exec $LUMO_STACK/lumo-login
+fi
+rm -f $log
+state saving "Restarting lumo-bridge..."
 launchctl kickstart -k gui/$(id -u)/$(agent lumo-tamer)
 sleep 4
-if (cd $TAMER_DIR && node dist/src/tamer.js auth status 2>&1) | grep -q "configured and valid"; then
-  state done "Signed in with its own session. Lumo is answering."
+if valid; then
+  state done "Signed in. Lumo is answering."
 else
-  state failed "Signed in, but auth status isn't valid yet: cd $TAMER_DIR && node dist/src/tamer.js auth status"
+  state failed "Sign-in didn't finish. Check your password, second password and authenticator code, then retry."
   exit 1
 fi

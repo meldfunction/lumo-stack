@@ -136,13 +136,12 @@ run mkdir -p $LUMO_HOME/code $LUMO_HOME/inbox $LUMO_HOME/out $LOG_DIR
 run chmod 700 $LUMO_HOME
 note "$LUMO_HOME/{code,inbox,out}"
 
-# --- 4. lumo-tamer -----------------------------------------------------------
-step "lumo-tamer (Lumo bridge) at $TAMER_COMMIT"
+# --- 4. lumo-bridge (our fork of lumo-tamer) ---------------------------------
+step "lumo-bridge (Lumo bridge) at $TAMER_COMMIT"
 if [[ ! -d $TAMER_DIR/.git ]]; then
-  run git clone -q https://github.com/ZeroTricks/lumo-tamer.git $TAMER_DIR
+  run git clone -q https://github.com/meldfunction/lumo-bridge.git $TAMER_DIR
   run git -C $TAMER_DIR checkout -q $TAMER_COMMIT
-  run git -C $TAMER_DIR apply $LUMO_STACK/patches/lumo-tamer-localhost.patch
-  note "patched to listen on 127.0.0.1 only"
+  note "localhost-only and two-password login are built in"
 else
   note "already present"
 fi
@@ -219,8 +218,10 @@ note "lumo-webui on 127.0.0.1:$WEBUI_PORT"
 step "Commands"
 run mkdir -p $BIN_DIR
 run ln -sf $LUMO_STACK/lumo $BIN_DIR/lumo
+run ln -sf $LUMO_STACK/lumo-task $BIN_DIR/lumo-task
+run ln -sf $LUMO_STACK/lumo-hq $BIN_DIR/lumo-hq
 [[ -n $with_claude ]] && run ln -sf $LUMO_STACK/claude-lumo $BIN_DIR/claude-lumo
-note "$BIN_DIR/lumo${with_claude:+, $BIN_DIR/claude-lumo}"
+note "$BIN_DIR/lumo, lumo-task, lumo-hq${with_claude:+, $BIN_DIR/claude-lumo}"
 [[ :$PATH: == *:$BIN_DIR:* ]] || note "${red}add $BIN_DIR to your PATH${rst}: echo 'export PATH=\"$BIN_DIR:\$PATH\"' >> ~/.zprofile"
 
 # --- 9. Proton sign-in + check -------------------------------------------------

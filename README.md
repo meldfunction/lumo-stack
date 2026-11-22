@@ -8,7 +8,7 @@ browser**. It all runs on your own machine. No Anthropic account, no OpenAI
 account, nothing phoning home.
 
 > **The fine print, up front.** Lumo has no public API yet. Lumo Stack uses
-> [lumo-tamer](https://github.com/ZeroTricks/lumo-tamer), a community bridge that
+> [lumo-bridge](https://github.com/meldfunction/lumo-bridge) (our fork of [lumo-tamer](https://github.com/ZeroTricks/lumo-tamer)), a community bridge that
 > talks to Lumo the way Proton's own web app does. Proton could block it, and it
 > could put your Proton account at risk. Not affiliated with or endorsed by Proton.
 > Rebellious, yes. Reckless, no.
@@ -107,6 +107,7 @@ It's all just `lumo`. Every command starts whatever's asleep first, and keeps a 
 | `lumo ask "…"` / `lumo chat` | Quick answer / plain terminal chat |
 | `claude-lumo` | Claude Code on Lumo (optional add-on). Lean by default; `LUMO_FULL=1` for the full setup |
 | `lumo-ask "…" files…` | One request, no agent loop: files pasted with line numbers, temperature 0. `--write f --check "cmd"` fixes a file and retries once if the check fails. Fastest and most accurate in benchmarks |
+| `lumo-task "…"` · `lumo-hq` | A small task log where every task carries a model (auto-picked, or pinned). Private tasks only ever run on Lumo. `lumo-hq` opens a local dashboard: tasks, model status, token HP bars. See [docs/hq.md](docs/hq.md) |
 | `lumo-cloudflare on\|off\|status\|usage\|models` | Opt-in: add Cloudflare Workers AI models (US/EU-origin only). Token in the Keychain, account ID in `lumo.env` |
 | `lumo-local on\|off\|status` | Opt-in, emergency: tool-capable Ollama models (optionally on an external drive, `LUMO_LOCAL_DRIVE`) as the private last-resort fallback. Nothing leaves the Mac |
 | `lumo-tinfoil on\|off\|status` | Opt-in: add Tinfoil confidential inference (hardware enclaves, attestation checked by the local tinfoil-proxy). Falls back to Lumo, never to Cloudflare |
@@ -224,6 +225,6 @@ Pinned versions live in `versions.env`; `lumo update` changes them.
 
 ---
 
-Built on [lumo-tamer](https://github.com/ZeroTricks/lumo-tamer), LiteLLM, OpenCode
+Built on [lumo-bridge](https://github.com/meldfunction/lumo-bridge), a fork of [lumo-tamer](https://github.com/ZeroTricks/lumo-tamer), LiteLLM, OpenCode
 and Open WebUI. Not affiliated with Proton AG. Made by people who read privacy
 policies for fun.
