@@ -46,11 +46,36 @@ mcp=(--strict-mcp-config); [[ $LUMO_KEEP_MCP == 1 ]] && mcp=()
 
 # 5. Lean by default: no hooks/plugins/CLAUDE.md, 6 tools, a nudge to make real tool calls.
 #    ~10x less input per turn -> faster Lumo, fewer Cloudflare neurons. LUMO_FULL=1 = full Claude Code.
-lean=(--bare --tools "Read,Write,Edit,Grep,Glob,Bash"
-      --append-system-prompt "Make real tool calls; never write a tool call as text or JSON in your reply. When editing, prefer writing the whole file if an exact-match edit fails.")
-[[ $LUMO_FULL == 1 ]] && lean=()
-log "start: model=lumo tool=$TOOL_MODEL ctx=$CLAUDE_CODE_MAX_CONTEXT_TOKENS mcp=${mcp:-kept} mode=${${lean:+lean}:-full}"
-claude "${mcp[@]}" "${lean[@]}" "$@"
+# Lumo runs Claude Code's tools through lumo-tamer's custom tool protocol (tool-call JSON in the reply),
+# so don't tell it "never write a tool call as JSON": that made it refuse to use the tools at all.
+nudge="Your tools are real and run on this machine: use them to do the work instead of describing commands or asking the user to run them. When editing, prefer writing the whole file if an exact-match edit fails."
+# Optional brief (LUMO_BRIEF=path in lumo.env): who/where Lumo is and the house rules. --bare skips
+# CLAUDE.md, so it goes into the system prompt instead. Kept short: it is sent on every request.
+brief=""; [[ -n $LUMO_BRIEF && -r $LUMO_BRIEF ]] && brief=$(<$LUMO_BRIEF)
+lean=(--bare --tools "Read,Write,Edit,Grep,Glob,Bash" --append-system-prompt "$nudge${brief:+
+
+$brief}")
+[[ $LUMO_FULL == 1 ]] && lean=(${brief:+--append-system-prompt "$brief"})
+
+# 6. Optional extra folders (LUMO_DIRS in lumo.env, colon-separated, e.g. your repo folders).
+dirs=(); for d in ${(s.:.)LUMO_DIRS}; do [[ -d $d ]] && dirs+=(--add-dir "$d"); done
+# 7. GitHub CLI: hand gh's existing login to the session as GITHUB_TOKEN/GH_TOKEN, so `gh` and
+#    https git work from Lumo's commands without reading the Keychain. LUMO_NO_GH=1 = no GitHub.
+if [[ $LUMO_NO_GH == 1 ]]; then unset GITHUB_TOKEN GH_TOKEN GITHUB_PERSONAL_ACCESS_TOKEN
+elif [[ -z $GITHUB_TOKEN ]] && command -v gh >/dev/null; then
+  GITHUB_TOKEN=$(env -u GH_TOKEN gh auth token 2>/dev/null) && [[ -n $GITHUB_TOKEN ]] && export GITHUB_TOKEN GH_TOKEN=$GITHUB_TOKEN
+fi
+[[ -n $GITHUB_TOKEN && -z $GH_TOKEN ]] && export GH_TOKEN=$GITHUB_TOKEN
+# 8. Permission mode: "auto" can't work here (its safety check runs on Anthropic's servers and
+#    LiteLLM doesn't pass it through), so every action would be refused. Use normal prompts
+#    unless a mode was passed. And let sandboxed commands reach GitHub so gh/git work.
+perm=(); [[ ${@[(I)--permission-mode*]} -gt 0 || ${@[(I)--dangerously-skip-permissions]} -gt 0 ]] || perm=(--permission-mode default)
+gh_hosts='"github.com","api.github.com","uploads.github.com","codeload.github.com","objects.githubusercontent.com","raw.githubusercontent.com"'
+# allowMachLookup trustd: Go programs like gh verify TLS through macOS's trust service, which the
+# sandbox blocks otherwise ("x509: OSStatus -26276").
+[[ $LUMO_NO_GH == 1 ]] || perm+=(--settings "{\"sandbox\":{\"network\":{\"allowedDomains\":[$gh_hosts],\"allowMachLookup\":[\"com.apple.trustd.agent\"]}}}")
+log "start: model=lumo tool=$TOOL_MODEL ctx=$CLAUDE_CODE_MAX_CONTEXT_TOKENS mcp=${mcp:-kept} mode=$([[ $LUMO_FULL == 1 ]] && print full || print lean) brief=${brief:+$LUMO_BRIEF} dirs=$(( $#dirs / 2 )) gh=${GITHUB_TOKEN:+yes}"
+claude "${mcp[@]}" "${lean[@]}" "${dirs[@]}" "${perm[@]}" "$@"
 code=$?
 log "exit: code=$code"
 exit $code
