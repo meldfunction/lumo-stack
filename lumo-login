@@ -70,7 +70,9 @@ while (( $(date +%s) < deadline )); do
     # Proton issues a session right after the first password, before the authenticator-code
     # and second-password pages. Keep the browser open until the key password is there;
     # if it never arrives (some accounts), accept the session after 30 seconds back on Lumo.
-    if ! print -r -- "$out" | grep -q "hasKeyPassword: yes"; then
+    # The key password is only fetched when conversation sync is on; with sync off it never comes.
+    if ! print -r -- "$out" | grep -q "hasKeyPassword: yes" \
+       && ! print -r -- "$out" | grep -q "Conversation sync: disabled"; then
       (( nokey_since )) || nokey_since=$(date +%s)
       if (( $(date +%s) - nokey_since < 30 )); then
         state waiting "Password accepted. Finish the authenticator code and second password in the browser..."
