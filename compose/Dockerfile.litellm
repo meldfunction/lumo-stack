@@ -2,7 +2,9 @@
 FROM python:3.12-slim
 ARG LITELLM_VERSION
 RUN pip install --no-cache-dir --disable-pip-version-check "litellm[proxy]==${LITELLM_VERSION}"
-COPY litellm-entrypoint.sh /usr/local/bin/litellm-entrypoint
+COPY compose/litellm-entrypoint.sh /usr/local/bin/litellm-entrypoint
+# Lumo router hook, loaded via `callbacks` in the config (which is mounted at /app/config.yaml).
+COPY templates/lumo_router.py /app/lumo_router.py
 RUN chmod 755 /usr/local/bin/litellm-entrypoint
-WORKDIR /tmp
+WORKDIR /app
 ENTRYPOINT ["litellm-entrypoint"]

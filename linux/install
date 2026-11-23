@@ -80,7 +80,7 @@ fi
 
 # --- 3. Folders --------------------------------------------------------------
 step "Folders"
-run mkdir -p $LUMO_HOME/{code,inbox,out} $LUMO_DATA/sessions $LUMO_DATA/opencode-home/{.config/opencode,.cache,.local/share}
+run mkdir -p $LUMO_HOME/{code,inbox,out} $LUMO_DATA/sessions $LUMO_DATA/router $LUMO_DATA/opencode-home/{.config/opencode,.cache,.local/share}
 run touch $LUMO_DATA/opencode-home/.config/opencode/opencode.json
 run install -d -m 700 $LUMO_CONF $SECRETS $SECRETS/tamer $SECRETS/litellm $SECRETS/code-web
 run chmod 700 $LUMO_DATA $LUMO_DATA/sessions

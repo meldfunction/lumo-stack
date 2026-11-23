@@ -1,0 +1,74 @@
+#!/bin/zsh
+# lumo-router — Lumo as a router layer (macOS). A LiteLLM hook (templates/lumo_router.py) that:
+#   keeps requests for lumo* on Lumo only for short Q&A (no tools, few messages, modest prompt),
+#   sends agent / tool / long work to Cloudflare (cf-gptoss / cf-mistral) when lumo-cloudflare is on,
+#   uses at most LUMO_ROUTER_BUDGET (60) Lumo messages per rolling 7 days, and pauses Lumo when
+#   Proton says "weekly quota" (retrying every 6h). Requests with header x-lumo-private: 1 are never
+#   sent to a cloud model; they're refused instead when Lumo can't take them.
+# Proton counts messages, not tokens, and publishes no cap; ~100/week is our estimate.
+#
+#   lumo-router on       install the hook into LiteLLM and restart it
+#   lumo-router off      remove it from LiteLLM (state file kept)
+#   lumo-router status   on/off, Lumo messages used this week, quota state, reroutes
+source ${0:A:h}/lib.zsh
+STATE=${LUMO_ROUTER_STATE:-$HOME/.cache/lumo-router.json}
+die() { print -u2 "lumo-router: $*"; exit 1; }
+cb() {  # cb add|remove|check : manage "lumo_router.router" in litellm_settings.callbacks
+  python3 - "$1" "$LITELLM_CFG" <<'PY'
+import re, sys
+mode, cfg = sys.argv[1:]
+s = open(cfg).read()
+m = re.search(r"(?m)^  callbacks:[ \t]*(.*)$", s)
+items = []
+if m:
+    v = m.group(1).split("#")[0].strip()
+    items = [x.strip().strip("\"'") for x in v.strip("[]").split(",") if x.strip()] if v else []
+if mode == "check":
+    sys.exit(0 if "lumo_router.router" in items else 1)
+items = [x for x in items if x != "lumo_router.router"]
+if mode == "add":
+    items.insert(0, "lumo_router.router")       # first: decide the model before other hooks run
+line = "  callbacks: [" + ", ".join(f'"{x}"' for x in items) + "]" if items else ""
+if m:
+    s = s[:m.start()] + line + s[m.end():] if line else re.sub(r"(?m)^  callbacks:.*\n?", "", s, count=1)
+elif line:
+    if "\nlitellm_settings:" not in s:
+        sys.exit("config has no litellm_settings: section")
+    s = s.replace("\nlitellm_settings:", "\nlitellm_settings:\n" + line, 1)
+open(cfg, "w").write(s)
+PY
+}
+restart() {
+  launchctl kickstart -k gui/$(id -u)/$(agent litellm) || die "couldn't restart LiteLLM"
+  for i in {1..45}; do curl -s -m 2 -o /dev/null http://127.0.0.1:$LITELLM_PORT/health/liveliness && return 0; sleep 2; done
+  die "LiteLLM didn't come back; see $LOG_DIR/litellm.log"
+}
+case $1 in
+  on)
+    cp $LUMO_STACK/templates/lumo_router.py $LITELLM_DIR/lumo_router.py || die "copy failed"
+    cp -p $LITELLM_CFG $LITELLM_CFG.bak-$(date +%Y%m%d%H%M)
+    cb add || die "config edit failed"; restart && print "Lumo router on." ;;
+  off)
+    cp -p $LITELLM_CFG $LITELLM_CFG.bak-$(date +%Y%m%d%H%M)
+    cb remove || die "config edit failed"; restart && print "Lumo router off: lumo* requests go straight to Lumo again." ;;
+  status|"")
+    cb check && print "router     : on" || print "router     : off (lumo-router on)"
+    python3 - "$STATE" <<'PY'
+import json, sys, time
+try:
+    s = json.load(open(sys.argv[1]))
+except Exception:
+    print("lumo       : no data yet"); sys.exit()
+now = time.time()
+used = len([t for t in s.get("sent", []) if now - t < 7 * 86400])
+print(f"lumo       : {used}/{s.get('budget', 60)} messages in the last 7 days (Proton's cap: unpublished, est. ~{s.get('weekly_est', 100)}/week)")
+if s.get("exhausted_until", 0) > now:
+    print(f"quota      : OUT since {time.strftime('%a %H:%M', time.localtime(s.get('quota_hit_at', now)))}, next try {time.strftime('%a %H:%M', time.localtime(s['exhausted_until']))}")
+else:
+    print("quota      : ok" + (f" (last out {time.strftime('%a %H:%M', time.localtime(s['quota_hit_at']))})" if s.get("quota_hit_at") else ""))
+r = s.get("rerouted") or {}
+print("rerouted   : " + (", ".join(f"{k} {v}" for k, v in sorted(r.items())) if r else "none yet"))
+PY
+    ;;
+  *) sed -n '2,14p' $0 | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

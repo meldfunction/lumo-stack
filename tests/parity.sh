@@ -32,6 +32,23 @@ ps '. /s/windows/lib.ps1; Edit-CloudflareBlock remove' >/dev/null
 diff -q $T/py/litellm-config.yaml $T/ps/litellm-config.yaml >/dev/null && pass "remove: same file" || bad "remove: files differ"
 diff -q <(grep -v '^$' $T/orig.yaml) <(grep -v '^$' $T/ps/litellm-config.yaml) >/dev/null && pass "remove restores the original" || bad "remove left changes"
 
+print "Lumo router on/off:"
+cp $T/orig.yaml $T/py/r.yaml; cp $T/orig.yaml $T/ps/litellm-config.yaml
+printf '  callbacks: ["redact.redactor"]\n' > $T/cbline
+python3 - $T/py/r.yaml $T/ps/litellm-config.yaml <<'PY'
+import sys
+for p in sys.argv[1:]:
+    s = open(p).read().replace("\nlitellm_settings:\n", "\nlitellm_settings:\n  callbacks: [\"redact.redactor\"]\n", 1)
+    s = "\n".join(l for l in s.split("\n") if "lumo_router.router" not in l)
+    open(p, "w").write(s)
+PY
+for op in on off on; do
+  python3 linux/cfgtool.py router $op $T/py/r.yaml
+  ps ". /s/windows/lib.ps1; Edit-RouterCallback $op" >/dev/null
+  diff -q $T/py/r.yaml $T/ps/litellm-config.yaml >/dev/null && pass "router $op: same file" || bad "router $op: files differ"
+done
+grep -q 'callbacks: \["lumo_router.router", "redact.redactor"\]' $T/py/r.yaml && pass "router first, other hooks kept" || bad "router callbacks line wrong"
+
 print "Linux scripts parse:"
 for f in linux/lumo linux/install linux/lib.zsh tests/parity.sh; do zsh -n $f && pass $f || bad $f; done
 python3 -m py_compile linux/cfgtool.py && pass linux/cfgtool.py || bad linux/cfgtool.py

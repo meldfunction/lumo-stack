@@ -58,7 +58,7 @@ if (-not $Yes -and -not $DryRun) { if ((Read-Host '    Continue? [y/N]') -notmat
 # --- 3. Folders --------------------------------------------------------------
 Step 'Folders'
 $dirs = @((Join-Path $S.LUMO_HOME 'code'), (Join-Path $S.LUMO_HOME 'inbox'), (Join-Path $S.LUMO_HOME 'out'),
-  (Join-Path $Data 'sessions'), (Join-Path $Data 'opencode-home\.config\opencode'), (Join-Path $Data 'opencode-home\.cache'),
+  (Join-Path $Data 'sessions'), (Join-Path $Data 'router'), (Join-Path $Data 'opencode-home\.config\opencode'), (Join-Path $Data 'opencode-home\.cache'),
   (Join-Path $Data 'opencode-home\.local\share'), $BinDir, $Conf, (Join-Path $Secrets 'tamer'), (Join-Path $Secrets 'litellm'), (Join-Path $Secrets 'code-web'))
 if ($DryRun) { Dry "create $($dirs -join ', ')"; Dry "lock $Conf and $Data\sessions to $env:USERNAME" }
 else {

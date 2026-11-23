@@ -46,8 +46,8 @@ services:
   litellm:
     <<: *hardened
     build:
-      context: .
-      dockerfile: Dockerfile.litellm
+      context: ..
+      dockerfile: compose/Dockerfile.litellm
       args:
         LITELLM_VERSION: ${LITELLM_VERSION}
     image: lumo-litellm:${LITELLM_VERSION}
@@ -55,8 +55,10 @@ services:
     environment:
       CF_ACCOUNT_ID: ${CF_ACCOUNT_ID:-}
       HOME: /tmp
+      LUMO_ROUTER_STATE: /data/lumo-router.json
     volumes:
       - ${LUMO_CONF}/litellm-config.yaml:/app/config.yaml:ro
+      - ${LUMO_DATA}/router:/data
       - ${LUMO_CONF}/secrets/litellm:/run/secrets:ro
     ports: ["127.0.0.1:${LITELLM_PORT:-4000}:4000"]
     networks: [stack]
