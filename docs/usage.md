@@ -168,11 +168,40 @@ inside WSL2 and use the Linux steps.
 
 ---
 
+## Lumo's weekly limit and the router
+
+Proton limits Lumo by **messages per week**, not tokens, and doesn't publish the number. Our
+estimate is **about 100 messages a week**: one stack ran out after roughly 95 to 130 messages in
+a week, which matches the only published figure (100 a week on a free account). A one-line question
+and a 19,000-token agent turn each count as one message, so coding agents use it up fast.
+
+The **Lumo router** (on by default) sits in LiteLLM and decides where each request for `lumo` goes:
+
+| Request | Goes to |
+|---|---|
+| Short Q&A: no tools, up to 12 messages, about 8,000 tokens or less | Lumo |
+| Agent or tool work, or a long request | Cloudflare (`cf-gptoss`; `cf-mistral` for `lumo-lite`), if Cloudflare is on; otherwise Lumo |
+| Lumo's weekly budget used (60 automated messages per 7 days), or Proton says "weekly quota" | Cloudflare if on, else refused. Lumo is retried every 6 hours |
+| Marked private (`x-lumo-private: 1` header) | Lumo only, never a cloud model. Refused if Lumo can't take it |
+
+The budget stops at 60 so the rest stays free for you in Proton's own Lumo apps, which share the
+same quota. To see which model really answered, look at the `x-litellm-model-group` header of the
+response; the body keeps saying `lumo`.
+
+```sh
+lumo-router status      # macOS        (lumo router status on Linux/WSL2 and Windows)
+lumo-router off         # turn it off   (lumo router off)
+```
+
+Settings, as environment variables for LiteLLM: `LUMO_ROUTER_BUDGET` (60), `LUMO_WEEKLY_EST` (100),
+`LUMO_QA_MAX_MESSAGES` (12), `LUMO_QA_MAX_TOKENS` (8000), `LUMO_PROBE_HOURS` (6).
+
 ## When something's off (every system)
 
 | You see | Do this |
 |---|---|
 | "sign-in needed", or chat answers with an auth error | `lumo login` |
+| "weekly quota", or "Lumo can't take this private request" | Proton's weekly Lumo limit is used up. `lumo-router status` (Linux/Windows: `lumo router status`) shows when it retries |
 | Proton asks for a CAPTCHA | Let `lumo login` switch to the browser sign-in (macOS opens a window; Linux/Windows use http://127.0.0.1:3001) |
 | A page at localhost won't load | `lumo status`, then `lumo doctor`: it says what failed and the command that fixes it |
 | "port … is in use" | Something else uses that port. Linux/Windows: change it in `lumo.env` (`WEBUI_PORT=8081` etc.) |

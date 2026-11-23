@@ -176,6 +176,44 @@ function Edit-CloudflareBlock([ValidateSet('add','remove')][string]$Mode) {
   [IO.File]::WriteAllText($LiteCfg, $txt)
 }
 
+# Lumo router hook in litellm_settings.callbacks (same result as linux/cfgtool.py router).
+function Edit-RouterCallback([ValidateSet('on','off')][string]$Mode) {
+  $txt = Get-Content -Raw -LiteralPath $LiteCfg
+  $m = [regex]::Match($txt, '(?m)^  callbacks:[ \t]*(.*)$')
+  $items = @()
+  if ($m.Success) {
+    $v = ($m.Groups[1].Value -split '#')[0].Trim().Trim('[', ']')
+    if ($v) { $items = @($v -split ',' | ForEach-Object { $_.Trim().Trim('"', "'") } | Where-Object { $_ }) }
+  }
+  $items = @($items | Where-Object { $_ -ne 'lumo_router.router' })
+  if ($Mode -eq 'on') { $items = @('lumo_router.router') + $items }
+  $line = if ($items.Count) { '  callbacks: [' + (($items | ForEach-Object { '"' + $_ + '"' }) -join ', ') + ']' } else { '' }
+  if ($m.Success) {
+    if ($line) { $txt = $txt.Substring(0, $m.Index) + $line + $txt.Substring($m.Index + $m.Length) }
+    else { $txt = [regex]::new('(?m)^  callbacks:.*\n?').Replace($txt, '', 1) }
+  } elseif ($line) {
+    if (-not $txt.Contains("`nlitellm_settings:")) { Stop-Lumo 'config has no litellm_settings: section' }
+    $i = $txt.IndexOf("`nlitellm_settings:") + "`nlitellm_settings:".Length
+    $txt = $txt.Substring(0, $i) + "`n" + $line + $txt.Substring($i)
+  }
+  [IO.File]::WriteAllText($LiteCfg, $txt)
+}
+function Test-RouterOn { [bool](Select-String -LiteralPath $LiteCfg -SimpleMatch 'lumo_router.router' -Quiet) }
+function Show-RouterStatus {
+  Write-Host "router     : $(if (Test-RouterOn) { 'on' } else { 'off (lumo router on)' })"
+  $p = Join-Path $Data 'router\lumo-router.json'
+  if (-not (Test-Path $p)) { Write-Host 'lumo       : no data yet'; return }
+  $s = Get-Content -Raw $p | ConvertFrom-Json
+  $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+  $used = @($s.sent | Where-Object { $now - $_ -lt 7 * 86400 }).Count
+  $budget = if ($s.budget) { $s.budget } else { 60 }; $est = if ($s.weekly_est) { $s.weekly_est } else { 100 }
+  Write-Host "lumo       : $used/$budget messages in the last 7 days (Proton's cap: unpublished, est. ~$est/week)"
+  if ($s.exhausted_until -gt $now) { Write-Host "quota      : OUT, next try $([DateTimeOffset]::FromUnixTimeSeconds([long]$s.exhausted_until).LocalDateTime.ToString('ddd HH:mm'))" }
+  else { Write-Host 'quota      : ok' }
+  $r = $s.rerouted.PSObject.Properties | ForEach-Object { "$($_.Name) $($_.Value)" }
+  Write-Host "rerouted   : $(if ($r) { $r -join ', ' } else { 'none yet' })"
+}
+
 function Get-ApiBases {
   @(Get-Content -LiteralPath $LiteCfg | Where-Object { $_ -notmatch '^\s*#' -and $_ -match '^\s*api_base:' } |
     ForEach-Object { $_.Trim() } | Sort-Object -Unique)

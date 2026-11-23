@@ -18,6 +18,9 @@ model_list:
 
 litellm_settings:
   drop_params: true
+  # Lumo router (templates/lumo_router.py): Lumo only for short Q&A; agent, tool and long work to
+  # Cloudflare when it's on; never more than 60 Lumo messages a week. Remove the line to turn it off.
+  callbacks: ["lumo_router.router"]
 
 general_settings:
   master_key: "{{LITELLM_KEY}}"

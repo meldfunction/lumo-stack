@@ -45,6 +45,7 @@ turning on:
 | Your folders (`LUMO_DIRS` in `lumo.env`) | Lumo can read and edit them, so what it reads goes to Proton | Leave `LUMO_DIRS` unset |
 | GitHub | `claude-lumo` gives the session your existing `gh` login, so Lumo can do on GitHub whatever that login allows. The sandbox allows the GitHub hosts, plus macOS's certificate service so `gh` can check TLS | `LUMO_NO_GH=1` |
 | Cloudflare (opt-in) | Claude Code's small background calls go to Cloudflare Workers AI: TLS and Cloudflare's policy, not Proton's protections | `lumo-cloudflare off` |
+| The Lumo router, with Cloudflare on | Agent, tool and long requests for `lumo` are answered by Cloudflare instead, so `claude-lumo`'s main work runs on Cloudflare. Only short Q&A uses Lumo. Requests marked private (`x-lumo-private: 1`) are never moved | `lumo-router off` |
 | Sandbox | Some tools need it off | `LUMO_NO_SANDBOX=1` (not recommended) |
 
 Pushing, PRs and anything public still go through `claude-lumo`'s permission prompts.
@@ -171,6 +172,7 @@ It's all just `lumo`. Every command starts whatever's asleep first, and keeps a 
 | `lumo-task "…"` · `lumo-hq` | A small task log where every task carries a model (auto-picked, or pinned). Private tasks only ever run on Lumo. `lumo-hq` opens a local dashboard: tasks, model status, token HP bars. See [docs/hq.md](docs/hq.md) |
 | `lumo-cloudflare on\|off\|status\|usage\|models` | Opt-in: add Cloudflare Workers AI models (US/EU-origin only). Token in the Keychain, account ID in `lumo.env` |
 | `lumo-local on\|off\|status` | Opt-in, emergency: tool-capable Ollama models (optionally on an external drive, `LUMO_LOCAL_DRIVE`) as the private last-resort fallback. Nothing leaves the Mac |
+| `lumo-router on\|off\|status` | On by default. Lumo is used only for short Q&A; agent, tool and long work goes to Cloudflare (if on), and automated use stops at 60 Lumo messages a week so Proton's weekly quota isn't used up. See [Lumo's weekly limit](docs/usage.md#lumos-weekly-limit-and-the-router) |
 | `lumo-tinfoil on\|off\|status` | Opt-in: add Tinfoil confidential inference (hardware enclaves, attestation checked by the local tinfoil-proxy). Falls back to Lumo, never to Cloudflare |
 | `lumo import` / `lumo fetch <url>` / `lumo export` | Move files into and out of the jail |
 | `lumo snapshots` / `lumo restore` | List undo points, then rewind (the rewind is undoable too) |
@@ -317,6 +319,7 @@ Pinned versions live in `versions.env`; `lumo update` changes them.
 ## What to expect
 
 - **Tool calling is experimental.** Quick edits and file writes work; long multi-step sessions trip over themselves more than with Claude or GPT.
+- **Lumo has a weekly limit.** Proton counts messages (not tokens) and doesn't publish the number; our estimate is about 100 a week. Agent tools burn through that fast, which is why the Lumo router keeps Lumo for Q&A. `lumo-router status` shows where you are.
 - **Some Lumo perks stay home.** Lumo's web search, image generation and memory don't make it through the bridge.
 - **Your login babysits itself.** It lasts 24 hours and renews on its own; if Proton signs you out, Lumo Home and a notification tell you.
 - **macOS is the most tested.** Linux and Windows are new in v0.2: Linux is built but not yet tested end to end, Windows is experimental and untested, and some extras (Lumo Home, sign-in alerts, Tinfoil, local Ollama) are macOS only for now.

@@ -9,6 +9,7 @@ macOS uses the repo-root scripts and Linux/WSL2 uses linux/lumo; this file touch
   lumo web [stop]                  chat in your browser (Open WebUI, :8080)
   lumo claude [args]               Claude Code on Lumo: UNSANDBOXED on Windows, so off unless LUMO_NO_SANDBOX=1
   lumo cloudflare on|off|status    opt in to Cloudflare Workers AI models
+  lumo router [status|on|off]      Lumo only for short Q&A, max 60 Lumo messages/week
   lumo doctor                      check everything
   lumo update                      rebuild for the versions in versions.env, roll back if it fails
   lumo uninstall [-Purge]          remove containers + command (-Purge: configs, login, chats too)
@@ -33,6 +34,7 @@ function Invoke-Up {
   Assert-Installed
   if (-not (Test-RoutesAllowed)) { Stop-Lumo 'LiteLLM config routes somewhere other than lumo-bridge or your Cloudflare account' }
   if ((Test-Healthy) -and -not $DryRun) { return }
+  New-Item -ItemType Directory -Force -Path (Join-Path $Data 'router') | Out-Null   # router state (bind mount)
   Write-Log 'up'
   if (-not (Invoke-Dc up -d @Base)) { Stop-Lumo 'docker compose up failed (lumo logs)' }
   if (-not (Wait-Up)) { Stop-Lumo "the stack didn't come up (lumo logs)" }
@@ -290,7 +292,7 @@ switch ($Command) {
   'up'         { Invoke-Up }
   'down'       { Assert-Installed; $null = Invoke-Dc --profile web --profile browser stop }
   'restart'    { Assert-Installed; $null = Invoke-Dc restart; $null = Wait-Up }
-  'status'     { Assert-Installed; $null = Invoke-Dc --profile web ps; Write-Host ''; ((Get-AuthStatus) -split "`n" | Select-String -Pattern 'valid|expire|not' | Select-Object -First 3) | Out-Host }
+  'status'     { Assert-Installed; $null = Invoke-Dc --profile web ps; Write-Host ''; ((Get-AuthStatus) -split "`n" | Select-String -Pattern 'valid|expire|not' | Select-Object -First 3) | Out-Host; Show-RouterStatus }
   'logs'       { $n = if ($env:LUMO_LOG_LINES) { $env:LUMO_LOG_LINES } else { '100' }; & docker compose -f $Compose logs --tail $n @Rest }
   'login'      { Invoke-Login -UseBrowser:$Browser }
   'code'       { Invoke-Code -Proj $Project -UseMax:$Max -UseWeb:$Web -AgentArgs $Rest }
@@ -298,9 +300,21 @@ switch ($Command) {
   'web'        { Invoke-WebUi ($Rest | Select-Object -First 1) }
   'claude'     { & (Join-Path $WinDir 'claude-lumo.ps1') @Rest; exit $LASTEXITCODE }
   'cloudflare' { Invoke-Cloudflare ([string]($Rest | Select-Object -First 1)) }
+  'router'     {
+    Assert-Installed
+    switch ([string]($Rest | Select-Object -First 1)) {
+      { $_ -in 'on', 'off' } {
+        if ($DryRun) { Write-Host "[dry-run] router $_, recreate litellm"; break }
+        Edit-RouterCallback $_; New-Item -ItemType Directory -Force -Path (Join-Path $Data 'router') | Out-Null
+        if ((Invoke-Dc up -d --force-recreate litellm) -and (Wait-Up)) { Write-Host "Lumo router $_." }
+      }
+      { $_ -in 'status', '' } { Show-RouterStatus }
+      default { Stop-Lumo 'usage: lumo router [status|on|off]' }
+    }
+  }
   'doctor'     { Invoke-Doctor }
   'update'     { Invoke-Update }
   'uninstall'  { Invoke-Uninstall }
-  { $_ -in 'help', '-h', '--help' } { Get-Content $PSCommandPath | Select-Object -Skip 1 -First 17 | Out-Host }
+  { $_ -in 'help', '-h', '--help' } { Get-Content $PSCommandPath | Select-Object -Skip 1 -First 18 | Out-Host }
   default      { Stop-Lumo "unknown command '$Command' (lumo help)" }
 }

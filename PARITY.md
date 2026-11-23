@@ -20,6 +20,7 @@ other columns and say in the PR whether they need the same change.**
 | Open WebUI | `lumo-web`, `webui-create` | `lumo web` | `lumo web` |
 | Claude Code on Lumo | `claude-lumo` (Seatbelt sandbox) | *paused: not written yet* | `claude-lumo.ps1` (refuses: no sandbox) |
 | Cloudflare opt-in | `lumo-cloudflare` | `lumo cloudflare` + `cfgtool.py` | `lumo cloudflare` + `Edit-CloudflareBlock` |
+| Lumo router (Q&A-only Lumo, weekly budget) | `lumo-router` + `templates/lumo_router.py` | `lumo router` + `cfgtool.py router` | `lumo router` + `Edit-RouterCallback` |
 | Health check | `lumo-doctor` | `lumo doctor` | `lumo doctor` |
 | Update | `lumo-update` | `lumo update` | `lumo update` |
 | Secrets | Keychain | 0600 files | user-only ACL files |

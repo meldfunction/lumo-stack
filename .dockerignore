@@ -1,0 +1,7 @@
+.git
+vendor/
+litellm/
+hq/
+docs/
+*.bak-*
+__pycache__/

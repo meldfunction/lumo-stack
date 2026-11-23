@@ -177,6 +177,9 @@ fi
 # start.sh launches LiteLLM; it adds the Cloudflare key from the Keychain only after `lumo-cloudflare on`.
 ( export LITELLM_DIR LUMO_STACK; render $LUMO_STACK/templates/litellm-start.sh $LITELLM_DIR/start.sh ) && run chmod 700 $LITELLM_DIR/start.sh
 note "start.sh written (Lumo only unless lumo-cloudflare on)"
+# Lumo router hook (new configs load it via callbacks; existing ones: lumo-router on).
+run cp $LUMO_STACK/templates/lumo_router.py $LITELLM_DIR/lumo_router.py
+note "Lumo router: Lumo for short Q&A, max 60 messages/week (lumo-router status)"
 
 # --- 6. Background services (LaunchAgents) -----------------------------------
 step "Background services"
