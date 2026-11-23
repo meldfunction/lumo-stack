@@ -71,10 +71,14 @@ fi
 #    unless a mode was passed. And let sandboxed commands reach GitHub so gh/git work.
 perm=(); [[ ${@[(I)--permission-mode*]} -gt 0 || ${@[(I)--dangerously-skip-permissions]} -gt 0 ]] || perm=(--permission-mode default)
 gh_hosts='"github.com","api.github.com","uploads.github.com","codeload.github.com","objects.githubusercontent.com","raw.githubusercontent.com"'
-# allowMachLookup trustd: Go programs like gh verify TLS through macOS's trust service, which the
-# sandbox blocks otherwise ("x509: OSStatus -26276").
-[[ $LUMO_NO_GH == 1 ]] || perm+=(--settings "{\"sandbox\":{\"network\":{\"allowedDomains\":[$gh_hosts],\"allowMachLookup\":[\"com.apple.trustd.agent\"]}}}")
-log "start: model=lumo tool=$TOOL_MODEL ctx=$CLAUDE_CODE_MAX_CONTEXT_TOKENS mcp=${mcp:-kept} mode=$([[ $LUMO_FULL == 1 ]] && print full || print lean) brief=${brief:+$LUMO_BRIEF} dirs=$(( $#dirs / 2 )) gh=${GITHUB_TOKEN:+yes}"
+# 9. Sandbox on: Lumo's shell commands run in Claude Code's OS sandbox (writes limited to the work
+#    folders, network only to allowed hosts), whatever the user's own settings say. LUMO_NO_SANDBOX=1 = off.
+#    With GitHub on, the GitHub hosts are allowed, plus macOS's trust service (trustd): Go programs
+#    like gh verify TLS through it, and the sandbox blocks it otherwise ("x509: OSStatus -26276").
+net=""; [[ $LUMO_NO_GH == 1 ]] || net=",\"network\":{\"allowedDomains\":[$gh_hosts],\"allowMachLookup\":[\"com.apple.trustd.agent\"]}"
+sandbox=true; [[ $LUMO_NO_SANDBOX == 1 ]] && sandbox=false
+perm+=(--settings "{\"sandbox\":{\"enabled\":$sandbox$net}}")
+log "start: model=lumo tool=$TOOL_MODEL ctx=$CLAUDE_CODE_MAX_CONTEXT_TOKENS mcp=${mcp:-kept} mode=$([[ $LUMO_FULL == 1 ]] && print full || print lean) brief=${brief:+$LUMO_BRIEF} dirs=$(( $#dirs / 2 )) gh=${GITHUB_TOKEN:+yes} sandbox=$sandbox"
 claude "${mcp[@]}" "${lean[@]}" "${dirs[@]}" "${perm[@]}" "$@"
 code=$?
 log "exit: code=$code"

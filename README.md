@@ -15,6 +15,37 @@ account, nothing phoning home.
 
 **Platforms:** macOS today. Windows and Linux land in v0.2 (Docker Compose, same stack everywhere).
 
+## Security: what we lock down, and what we open up
+
+Proton protects your chats once they reach Lumo. Lumo Stack can't make Lumo itself any more private
+than that: every prompt still goes to Proton. What it controls is everything around Lumo on your Mac.
+
+**Locked down**
+
+| Where | What we do |
+|---|---|
+| The bridge | [lumo-bridge](https://github.com/meldfunction/lumo-bridge) listens on `127.0.0.1` only. Upstream listened on every interface, so anyone on your Wi-Fi could reach it |
+| Secrets | Your Proton session sits in lumo-bridge's encrypted vault; the Cloudflare token in the macOS Keychain. Your Proton passwords are never stored |
+| Signing in | Your old login is kept until the new one is proven to answer. The browser sign-in waits for the whole flow (authenticator code, second password) and never reloads the page under you. Page addresses in the log are cut at `?` and `#`, so tokens in URLs don't end up in log files |
+| `claude-lumo` | No Anthropic account, telemetry or error reports, update checks or MCP servers. It refuses to start if LiteLLM could route anywhere outside its allowlist (Lumo, plus Cloudflare, Tinfoil or local Ollama only if you opt in) |
+| `claude-lumo`'s commands | Run in Claude Code's OS sandbox, which `claude-lumo` now switches on itself: files can only be written in the work folders, and network only reaches hosts on its allowlist. We checked: `gh` reached GitHub, `example.com` was blocked |
+| `claude-lumo`'s permissions | Normal permission prompts: anything outside its allowlist asks you first |
+| The jailed agent | No internet, no home folder, read-only config, undo snapshots (see [The jail](#the-jail)) |
+
+**Opened up, on purpose**
+
+To make `claude-lumo` useful for real work, it can now reach more than it used to. Know what you're
+turning on:
+
+| What | What it means | Off switch |
+|---|---|---|
+| Your folders (`LUMO_DIRS` in `lumo.env`) | Lumo can read and edit them, so what it reads goes to Proton | Leave `LUMO_DIRS` unset |
+| GitHub | `claude-lumo` gives the session your existing `gh` login, so Lumo can do on GitHub whatever that login allows. The sandbox allows the GitHub hosts, plus macOS's certificate service so `gh` can check TLS | `LUMO_NO_GH=1` |
+| Cloudflare (opt-in) | Claude Code's small background calls go to Cloudflare Workers AI: TLS and Cloudflare's policy, not Proton's protections | `lumo-cloudflare off` |
+| Sandbox | Some tools need it off | `LUMO_NO_SANDBOX=1` (not recommended) |
+
+Pushing, PRs and anything public still go through `claude-lumo`'s permission prompts.
+
 ---
 
 ## "But I've got nothing to hide"
@@ -73,15 +104,18 @@ Claude Code with the brain swapped out. Here's exactly how it keeps Anthropic ou
 
 | What Claude Code normally does | What `claude-lumo` does instead |
 |---|---|
-| Sends prompts to Anthropic's API | `ANTHROPIC_BASE_URL` points at LiteLLM on `127.0.0.1:4000`, which forwards only to Lumo |
+| Sends prompts to Anthropic's API | `ANTHROPIC_BASE_URL` points at LiteLLM on `127.0.0.1:4000`, which forwards to Lumo (and to Cloudflare, Tinfoil or local Ollama only if you opt in) |
 | Signs in with your Anthropic account or API key | Uses your local LiteLLM key; `ANTHROPIC_API_KEY` is unset |
 | Uses Opus, Sonnet and Haiku | Every model slot, subagents included, maps to `lumo`, `lumo-max` or `lumo-lite` |
 | Sends telemetry and error reports, checks for updates | All switched off (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_TELEMETRY`, `DISABLE_ERROR_REPORTING`, `DISABLE_AUTOUPDATER`) |
 | Loads your MCP servers (which make their own connections) | Off by default (`--strict-mcp-config`); `LUMO_KEEP_MCP=1` brings them back |
-| Trusts its config | Refuses to start if LiteLLM routes anywhere but lumo-tamer |
+| Trusts its config | Refuses to start if LiteLLM could route outside its allowlist |
+| Runs commands unsandboxed, in "auto" permission mode if that's your setting | Switches Claude Code's sandbox on, and uses normal permission prompts (auto mode's safety check runs on Anthropic's servers, which `claude-lumo` never talks to) |
 
 We checked by watching the network: with MCP off, a `claude-lumo` session's only
-connection was to `127.0.0.1:4000`. Your plain `claude` command stays your normal
+connection was to `127.0.0.1:4000`. That was before GitHub access: with it on, commands
+Lumo runs can also reach GitHub (see [Security](#security-what-we-lock-down-and-what-we-open-up));
+`LUMO_NO_GH=1` takes you back. Your plain `claude` command stays your normal
 Claude Code; only `claude-lumo` is Lumo-only.
 
 Installing Claude Code itself is one download from Anthropic (the official
@@ -91,7 +125,7 @@ does it for you if it's missing. No Anthropic account is needed for `claude-lumo
 Heads up: Claude Code was built around Claude's tool use. With Lumo it's great
 for questions and small edits, and wobblier on long multi-step jobs. For anything
 that edits files, the jailed `lumo` agent is the safer bet: `claude-lumo` runs on
-your Mac with Claude Code's normal permission prompts, not in a jail.
+your Mac in Claude Code's sandbox with normal permission prompts, not in a jail.
 
 ## Commands
 
