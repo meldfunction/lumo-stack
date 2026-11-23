@@ -149,6 +149,8 @@ Windows there is no sandbox, so `claude-lumo` stays off there unless you switch 
 
 It's all just `lumo`. Every command starts whatever's asleep first, and keeps a log.
 
+**Step-by-step examples, browser and terminal, for macOS, Linux and Windows: [docs/usage.md](docs/usage.md).**
+
 > **On Linux or Windows?** The table below is macOS. There it's one command with subcommands:
 > `lumo code` (the jailed agent; `lumo code run "task"` for a one-shot), `lumo code --web`, `lumo web`,
 > `lumo login`, `lumo cloudflare on|off|status`, `lumo status`, `lumo doctor`, `lumo update`,
