@@ -1,0 +1,139 @@
+#!/bin/zsh
+# Lumo Stack installer for Linux and WSL2 (services under Docker Compose).
+#   ./linux/install                  interactive install
+#   ./linux/install --workspace DIR  workspace folder (default ~/lumo)
+#   ./linux/install --with-claude    also add `lumo claude` / claude-lumo (Claude Code on Lumo)
+#   ./linux/install --no-login       skip the Proton sign-in at the end
+#   ./linux/install --yes            don't ask for confirmation
+#   ./linux/install --dry-run        show what would happen, change nothing
+# Safe to re-run: existing keys, configs and logins are kept.
+# macOS: use ./install in the repo root instead.
+emulate -L zsh
+source ${0:A:h}/lib.zsh
+
+with_claude="" no_login="" yes="" dry=""
+while (( $# )); do
+  case $1 in
+    --workspace)   LUMO_HOME=${2:A}; shift 2 ;;
+    --with-claude) with_claude=1; shift ;;
+    --no-login)    no_login=1; shift ;;
+    --yes|-y)      yes=1; shift ;;
+    --dry-run)     dry=1; shift ;;
+    -h|--help)     sed -n '2,10p' $0 | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) print -u2 "install: unknown option $1"; exit 1 ;;
+  esac
+done
+
+bold=$'\e[1m' dim=$'\e[2m' red=$'\e[31m' grn=$'\e[32m' rst=$'\e[0m'
+step() { print "\n${bold}==> $*${rst}"; }
+note() { print "    $*"; }
+die()  { print -u2 "${red}install: $*${rst}"; exit 1; }
+run()  { if [[ -n $dry ]]; then print "    ${dim}[dry-run] $*${rst}"; else "$@"; fi; }
+render() { if [[ -n $dry ]]; then print "    ${dim}[dry-run] write $2 (0600)${rst}"; else python3 $LUMO_LINUX/cfgtool.py render $1 $2; fi; }
+key() { openssl rand -hex 24; }
+
+[[ $(uname -s) == Linux ]] || die "this installer is for Linux and WSL2 (macOS: ./install)"
+where=Linux; is_wsl && where="Linux on WSL2"
+
+# --- 0. Where things go ------------------------------------------------------
+step "Lumo Stack for $where"
+note "Workspace:  $LUMO_HOME   (code/ inbox/ out/)"
+note "Stack:      $LUMO_STACK"
+note "Config:     $LUMO_CONF   (configs + secrets, only you can read them)"
+note "Login data: $LUMO_DATA"
+note "Services:   Docker Compose project '$LUMO_PROJECT', ports on 127.0.0.1 only"
+note "Command:    $BIN_DIR/lumo"
+
+# --- 1. Prerequisites --------------------------------------------------------
+step "Checking prerequisites"
+missing=()
+for c in docker git curl openssl python3 script; do command -v $c >/dev/null || missing+=($c); done
+if [[ -n $with_claude ]]; then
+  for c in bwrap socat; do command -v $c >/dev/null || missing+=($c); done
+fi
+if (( ${#missing} )); then
+  hint="Debian/Ubuntu: sudo apt install ${${missing/bwrap/bubblewrap}/script/util-linux} · Fedora: sudo dnf install ${${missing/bwrap/bubblewrap}/script/util-linux}"
+  [[ ${missing[(I)docker]} -gt 0 ]] && hint+=" · Docker: https://docs.docker.com/engine/install/"
+  die "missing: ${missing[*]}  ($hint)"
+fi
+docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is missing (package docker-compose-plugin)"
+docker info >/dev/null 2>&1 || die "Docker isn't running, or you can't use it without sudo (sudo usermod -aG docker \$USER, then log in again)"
+for p in $TAMER_PORT $LITELLM_PORT $WEBUI_PORT; do
+  if (( $(ss -Hltn "sport = :$p" 2>/dev/null | wc -l) )) && ! dc ps -q 2>/dev/null | grep -q .; then
+    die "port $p is in use by something else (pick other ports in $LUMO_CONF/lumo.env: TAMER_PORT, LITELLM_PORT, WEBUI_PORT)"
+  fi
+done
+note "${grn}ok${rst}: $where, $(docker compose version --short 2>/dev/null | sed 's/^/Compose /'), git, python3"
+
+# --- 2. Consent --------------------------------------------------------------
+step "The fine print (read it, it's short)"
+cat <<'EOF'
+    Lumo has no public API. Lumo Stack uses lumo-bridge, a community bridge that talks to Lumo
+    the way Proton's own web app does. Proton could block it, and it could put your Proton
+    account at risk. Not affiliated with or endorsed by Proton.
+    On Linux, your secrets (the bridge's vault key, API tokens) are files only your user can
+    read. That is weaker than the macOS Keychain: any program running as you can read them.
+EOF
+if [[ -z $yes && -z $dry ]]; then
+  read "ans?    Continue? [y/N] "; [[ $ans == [yY]* ]] || die "cancelled"
+fi
+
+# --- 3. Folders --------------------------------------------------------------
+step "Folders"
+run mkdir -p $LUMO_HOME/{code,inbox,out} $LUMO_DATA/sessions $LUMO_DATA/opencode-home/{.config/opencode,.cache,.local/share}
+run touch $LUMO_DATA/opencode-home/.config/opencode/opencode.json
+run install -d -m 700 $LUMO_CONF $SECRETS $SECRETS/tamer $SECRETS/litellm $SECRETS/code-web
+run chmod 700 $LUMO_DATA $LUMO_DATA/sessions
+note "$LUMO_HOME/{code,inbox,out} · $LUMO_CONF (0700)"
+
+# --- 4. Keys and configs -----------------------------------------------------
+step "Keys and configs"
+if [[ -s $SECRETS/tamer/lumo-vault-key ]]; then note "vault key kept"
+else
+  [[ -n $dry ]] && note "${dim}[dry-run] new vault key${rst}" || openssl rand -base64 32 | tr -d '\n' | secret_set tamer lumo-vault-key
+  note "vault key created (encrypts your Proton session)"
+fi
+export TAMER_KEY LITELLM_KEY
+if [[ -f $TAMER_CFG ]]; then TAMER_KEY=$(tamer_key); note "lumo-bridge config kept"
+else TAMER_KEY="lt-$(key)"; render $LUMO_STACK/compose/tamer-config.yaml $TAMER_CFG; note "lumo-bridge config written (random API key)"; fi
+if [[ -f $LITELLM_CFG ]]; then LITELLM_KEY=$(litellm_key); note "LiteLLM config kept"
+else LITELLM_KEY="sk-$(key)"; render $LUMO_STACK/compose/litellm-config.yaml $LITELLM_CFG; note "LiteLLM config written (routes only to lumo-bridge)"; fi
+if [[ -n $dry ]]; then note "${dim}[dry-run] write $LUMO_CONF/webui.env (0600)${rst}"
+else ( umask 077; print -r -- "OPENAI_API_KEY=$LITELLM_KEY" > $LUMO_CONF/webui.env ); fi
+[[ -f $LUMO_CONF/lumo.env ]] || run sh -c "printf '%s\n' '# This machine'\"'\"'s settings for Lumo Stack (ports, Cloudflare account). Not shared.' 'LUMO_HOME=$LUMO_HOME' > '$LUMO_CONF/lumo.env'"
+
+# --- 5. Images and services --------------------------------------------------
+step "Building and starting (first time: several minutes)"
+note "lumo-bridge $TAMER_COMMIT, LiteLLM $LITELLM_VERSION, OpenCode $OPENCODE_VERSION"
+run tamer_src || die "couldn't fetch lumo-bridge $TAMER_COMMIT"
+run dc build tamer litellm || die "image build failed"
+run dc pull -q bridge relay || die "image pull failed"
+if ! docker image inspect lumo-opencode:$OPENCODE_VERSION >/dev/null 2>&1; then
+  run docker build -q -t lumo-opencode:$OPENCODE_VERSION -f $LUMO_STACK/Dockerfile.opencode $LUMO_STACK >/dev/null
+fi
+run dc up -d bridge tamer litellm relay || die "couldn't start the services (lumo logs)"
+note "Open WebUI downloads the first time you run 'lumo web'"
+
+# --- 6. Commands -------------------------------------------------------------
+step "Commands"
+run mkdir -p $BIN_DIR
+run ln -sf $LUMO_LINUX/lumo $BIN_DIR/lumo
+[[ -n $with_claude ]] && run ln -sf $LUMO_LINUX/claude-lumo $BIN_DIR/claude-lumo
+note "$BIN_DIR/lumo${with_claude:+, $BIN_DIR/claude-lumo}"
+[[ :$PATH: == *:$BIN_DIR:* ]] || note "${red}add $BIN_DIR to your PATH${rst}: echo 'export PATH=\"$BIN_DIR:\$PATH\"' >> ~/.profile"
+
+# --- 7. Sign-in + check ------------------------------------------------------
+if [[ -n $dry ]]; then step "Done (dry run): nothing was changed"; exit 0; fi
+if [[ -z $no_login ]]; then
+  step "Sign in to Proton"
+  note "Email, password, second password (if any) and authenticator code. Passwords aren't stored."
+  $LUMO_LINUX/lumo login || note "${red}sign-in didn't finish${rst}: run 'lumo login' later"
+fi
+step "Checking everything"
+$LUMO_LINUX/lumo doctor || true
+step "You're in."
+cat <<EOF
+    lumo code      the jailed coding agent (it only sees $LUMO_HOME)
+    lumo web       chat in your browser
+    lumo status    what's running · lumo doctor  check everything · lumo help  all commands
+EOF

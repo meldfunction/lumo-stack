@@ -1,0 +1,292 @@
+#!/bin/zsh
+# Lumo Stack for Linux and WSL2: one command, services under Docker Compose.
+# (macOS uses the scripts in the repo root instead; nothing here touches them.)
+#
+#   lumo up | down | restart | status | logs [service]
+#   lumo login [--browser]          sign in to Proton (password login; browser if Proton wants a CAPTCHA)
+#   lumo code [-p project] [--max] [opencode args]   the jailed coding agent (sees only ~/lumo)
+#   lumo code --web | code-web stop                  the same agent in your browser (:4096)
+#   lumo web [stop]                 chat in your browser (Open WebUI, :8080)
+#   lumo claude [args]              Claude Code on Lumo (needs --with-claude at install)
+#   lumo cloudflare on|off|status   opt in to Cloudflare Workers AI models
+#   lumo doctor                     check everything
+#   lumo update                     rebuild for the versions in versions.env, roll back if it fails
+#   lumo uninstall [--purge]        remove containers + command (--purge: configs, login, chats too)
+#   add --dry-run before any command to see what it would do
+emulate -L zsh
+source ${0:A:h}/lib.zsh
+LOG=$LOG_DIR/lumo.log
+log()  { print -r -- "$(date '+%Y-%m-%d %H:%M:%S') [$$] $*" >> "$LOG"; }
+die()  { log "ABORT: $*"; print -u2 "lumo: $*"; exit 1; }
+dry=""; [[ $1 == --dry-run ]] && { dry=1; shift; }
+run()  { if [[ -n $dry ]]; then print -r -- "[dry-run] ${(j: :)${(q-)@}}"; else "$@"; fi; }
+CF_BASE="https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID:-none}/ai/v1"
+CODE_IMAGE=lumo-opencode:$OPENCODE_VERSION
+
+need_install() { [[ -r $LITELLM_CFG && -r $TAMER_CFG ]] || die "not installed yet: run $LUMO_LINUX/install"; }
+bases() { grep -vE '^\s*#' $LITELLM_CFG | grep -E '^\s*api_base:' | sed 's/^ *//' | sort -u; }
+lumo_only() { [[ $(bases) == "api_base: http://bridge:3004/v1" ]]; }
+healthy() { curl -s -m 3 -o /dev/null http://127.0.0.1:$TAMER_PORT/health \
+            && curl -s -m 3 -o /dev/null http://127.0.0.1:$LITELLM_PORT/health/liveliness; }
+wait_up() {
+  [[ -n $dry ]] && return 0
+  print -nu2 "Waiting for lumo-bridge and LiteLLM"
+  for i in {1..60}; do healthy && { print -u2; return 0; }; print -nu2 "."; sleep 2; done
+  print -u2; return 1
+}
+auth_status() { dc exec -T tamer tamer auth status 2>&1 | sed 's/\x1b\[[0-9;]*m//g'; }
+
+cmd_up() {
+  need_install
+  # LiteLLM may only route to lumo-bridge, or to Cloudflare on your account after `lumo cloudflare on`.
+  bases | grep -qvxF -e "api_base: http://bridge:3004/v1" -e "api_base: $CF_BASE" \
+    && die "LiteLLM config routes somewhere other than lumo-bridge or your Cloudflare account"
+  healthy && [[ -z $dry ]] && return 0
+  log "up"; run dc up -d bridge tamer litellm relay || die "docker compose up failed (lumo logs)"
+  wait_up || die "the stack didn't come up (lumo logs)"
+}
+
+cmd_login() {
+  need_install; cmd_up
+  if [[ $1 == --browser ]]; then
+    log "login: browser"
+    run dc --profile browser up -d browser || die "couldn't start the sign-in browser"
+    print "Open http://127.0.0.1:$BROWSER_PORT, sign in to Proton there, then come back here."
+    [[ -z $dry ]] && open_url http://127.0.0.1:$BROWSER_PORT
+    run dc run --rm tamer auth browser; local rc=$?
+    run dc --profile browser stop browser
+    (( rc == 0 )) || die "browser sign-in didn't finish"
+  else
+    log "login: password"
+    local tlog=$(mktemp); trap "rm -f $tlog" EXIT
+    # `script` keeps the terminal interactive while recording it, to spot a CAPTCHA request.
+    run script -q -e -c "docker compose -f $LUMO_STACK/compose/compose.yaml run --rm tamer auth login" $tlog
+    if grep -q "Code=9001\|CAPTCHA" $tlog 2>/dev/null; then
+      print "Proton asked for a CAPTCHA. Switching to the browser sign-in..."
+      cmd_login --browser; return
+    fi
+  fi
+  run dc restart tamer; [[ -n $dry ]] && return
+  sleep 4
+  auth_status | grep -q "configured and valid" && print "Signed in. Lumo is answering." \
+    || die "sign-in didn't finish: check your password, second password and authenticator code, then retry"
+}
+
+cmd_code() {
+  local project="" max="" web=""
+  while (( $# )); do
+    case $1 in
+      -p|--project) project=$2; shift 2 ;;
+      --max) max=1; shift ;;
+      --web) web=1; shift ;;
+      *) break ;;
+    esac
+  done
+  [[ -z $project || $project =~ '^[A-Za-z0-9._-]+$' ]] || die "project names: letters, digits, . _ - only"
+  log "code: project=${project:-<root>} max=${max:-0} web=${web:-0}"
+  grep -q '"baseURL": "http://lumo-relay:4000/v1"' $LUMO_STACK/opencode.json \
+    || die "opencode.json points somewhere other than lumo-relay"
+  need_install; lumo_only || die "LiteLLM routes beyond Lumo (lumo cloudflare off first): the jail is Lumo-only"
+  cmd_up
+  docker image inspect $CODE_IMAGE >/dev/null 2>&1 || run docker build -q -t $CODE_IMAGE -f $LUMO_STACK/Dockerfile.opencode $LUMO_STACK >/dev/null \
+    || die "couldn't build $CODE_IMAGE"
+  [[ -n $dry || $(docker network inspect -f '{{.Internal}}' $LUMO_JAIL_NET 2>/dev/null) == true ]] \
+    || die "network $LUMO_JAIL_NET missing or not internal"
+
+  # Project folder, AGENTS.md for new projects, and a git snapshot so work can be undone.
+  local dir=$LUMO_HOME/code${project:+/$project} wdir=/lumo/code${project:+/$project}
+  run mkdir -p $dir $LUMO_HOME/inbox $LUMO_HOME/out $LUMO_DATA/opencode-home/{.config/opencode,.cache,.local/share}
+  [[ -n $dry ]] || touch $LUMO_DATA/opencode-home/.config/opencode/opencode.json   # mount point, owned by you
+  if [[ -n $project && ! -e $dir/AGENTS.md && -z $dry ]]; then
+    sed "s/{{PROJECT}}/$project/g" $LUMO_STACK/templates/AGENTS.md > $dir/AGENTS.md
+  fi
+  if [[ -z $dry ]]; then
+    local g=(git -C $dir -c user.name=lumo -c user.email=lumo@localhost)
+    [[ -d $dir/.git ]] || $g init -q
+    if [[ -n $($g status --porcelain 2>/dev/null) ]] || ! $g rev-parse -q HEAD >/dev/null 2>&1; then
+      $g add -A && $g commit -qm "lumo snapshot $(date '+%Y-%m-%d %H:%M:%S')" --allow-empty
+    fi
+  fi
+
+  export LITELLM_KEY=$(litellm_key)
+  local jail=(
+    --read-only --tmpfs /tmp:rw,exec,nosuid,size=512m
+    --cap-drop ALL --security-opt no-new-privileges
+    --pids-limit 512 --memory 4g --cpus 4
+    --user $LUMO_UID:$LUMO_GID -e HOME=/home/node
+    --network $LUMO_JAIL_NET
+    -e LITELLM_KEY
+    -e OPENCODE_DISABLE_MODELS_FETCH=1 -e OPENCODE_DISABLE_DEFAULT_PLUGINS=1
+    -e OPENCODE_DISABLE_LSP_DOWNLOAD=1 -e OPENCODE_DISABLE_AUTOUPDATE=1 -e OPENCODE_DISABLE_EXTERNAL_SKILLS=1
+    -v $LUMO_DATA/opencode-home:/home/node
+    -v $LUMO_STACK/opencode.json:/home/node/.config/opencode/opencode.json:ro
+    -v $LUMO_HOME/code:/lumo/code
+    -v $LUMO_HOME/inbox:/lumo/inbox:ro
+    -v $LUMO_HOME/out:/lumo/out
+    -w $wdir
+  )
+  local model=(); [[ -n $max ]] && model=(-m lumo/lumo-max)
+
+  if [[ -n $web ]]; then
+    # Browser UI: the jail network can't publish ports, so also attach a bridge without
+    # masquerading (no route to the internet) and publish 127.0.0.1:4096 only.
+    local webnet=${LUMO_PROJECT}-web-only name=${LUMO_PROJECT}-code-web
+    docker network inspect $webnet >/dev/null 2>&1 \
+      || run docker network create -o com.docker.network.bridge.enable_ip_masquerade=false $webnet >/dev/null
+    export OPENCODE_SERVER_USERNAME=lumo OPENCODE_SERVER_PASSWORD=$(secret_get code-web password)
+    if [[ -z $OPENCODE_SERVER_PASSWORD ]]; then
+      OPENCODE_SERVER_PASSWORD=$(openssl rand -base64 18 | tr -d '/+=')
+      print -rn -- $OPENCODE_SERVER_PASSWORD | secret_set code-web password
+    fi
+    docker rm -f $name >/dev/null 2>&1
+    run docker create --name $name $jail -p 127.0.0.1:$CODE_WEB_PORT:$CODE_WEB_PORT \
+      -e OPENCODE_SERVER_USERNAME -e OPENCODE_SERVER_PASSWORD \
+      $CODE_IMAGE web --hostname 0.0.0.0 --port $CODE_WEB_PORT >/dev/null || die "docker create failed"
+    run docker network disconnect $LUMO_JAIL_NET $name 2>/dev/null
+    run docker network connect $webnet $name
+    run docker network connect $LUMO_JAIL_NET $name
+    run docker start $name >/dev/null || die "docker start failed"
+    print "Lumo Code (browser): http://localhost:$CODE_WEB_PORT  (stop: lumo code-web stop)"
+    print "  login: lumo / password: cat $SECRETS/code-web/password"
+    return
+  fi
+
+  local tty=(-i); [[ -t 0 && -t 1 ]] && tty=(-it)
+  local args=("$@")
+  [[ -n $model ]] && { [[ $1 == run ]] && args=(run $model "${@:2}") || args=($model "$@"); }
+  run docker run --rm $tty $jail $CODE_IMAGE $args
+}
+
+cmd_web() {
+  need_install
+  case $1 in
+    stop)   run dc --profile web stop webui; return ;;
+    status) dc --profile web ps webui; return ;;
+  esac
+  cmd_up
+  run dc --profile web up -d webui || die "couldn't start Open WebUI"
+  if [[ -z $dry ]]; then
+    print -n "Waiting for Open WebUI"
+    for i in {1..90}; do curl -s -m 2 http://127.0.0.1:$WEBUI_PORT/health | grep -q true && break; print -n "."; sleep 2; done; print
+    curl -s -m 2 http://127.0.0.1:$WEBUI_PORT/health | grep -q true || die "Open WebUI didn't come up (lumo logs webui)"
+  fi
+  print "Open WebUI ready: http://localhost:$WEBUI_PORT"
+  [[ -n $LUMO_WEB_NO_OPEN || -n $dry ]] || open_url http://localhost:$WEBUI_PORT
+}
+
+cf_verify() {  # works for account-owned and user tokens
+  local k=$(secret_get litellm cloudflare-api-key); [[ -n $k && -n $CF_ACCOUNT_ID ]] || return 1
+  curl -s -m 20 "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/tokens/verify" -H "Authorization: Bearer $k" | grep -q '"success":true' && return 0
+  curl -s -m 20 "https://api.cloudflare.com/client/v4/user/tokens/verify" -H "Authorization: Bearer $k" | grep -q '"success":true'
+}
+set_env() {  # set_env NAME value|"" : edit this machine's lumo.env
+  local f=$LUMO_CONF/lumo.env; touch $f
+  sed -i "/^$1=/d" $f; [[ -n $2 ]] && print -r -- "$1=$2" >> $f
+}
+cmd_cloudflare() {
+  need_install
+  case $1 in
+    on)
+      if [[ -z $CF_ACCOUNT_ID ]]; then read "CF_ACCOUNT_ID?Cloudflare account ID: "; fi
+      [[ $CF_ACCOUNT_ID =~ '^[0-9a-f]{32}$' ]] || die "that doesn't look like an account ID (32 hex characters)"
+      if [[ $2 == --new-token || -z $(secret_get litellm cloudflare-api-key) ]]; then
+        print "API token (Cloudflare dashboard > My Profile > API Tokens > \"Workers AI\" template)."
+        local t; read -s "t?Token (hidden): "; print
+        [[ -n $t ]] || die "no token given"
+        [[ -n $dry ]] || print -rn -- $t | secret_set litellm cloudflare-api-key
+      fi
+      [[ -n $dry ]] && { print "[dry-run] add cf-* models, restart litellm"; return; }
+      cf_verify || die "Cloudflare rejected that token for account $CF_ACCOUNT_ID"
+      set_env CF_ACCOUNT_ID $CF_ACCOUNT_ID
+      CF_ACCOUNT_ID=$CF_ACCOUNT_ID python3 $LUMO_LINUX/cfgtool.py cloudflare add $LITELLM_CFG $LUMO_STACK/templates/litellm-cloudflare.yaml || die "config edit failed"
+      export CF_ACCOUNT_ID; dc up -d --force-recreate litellm >/dev/null && wait_up && print "Cloudflare models on." ;;
+    off)
+      [[ -n $dry ]] && { print "[dry-run] remove cf-* models${2:+, delete token}, restart litellm"; return; }
+      python3 $LUMO_LINUX/cfgtool.py cloudflare remove $LITELLM_CFG $LUMO_STACK/templates/litellm-cloudflare.yaml || die "config edit failed"
+      [[ $2 == --forget ]] && { secret_rm litellm cloudflare-api-key; set_env CF_ACCOUNT_ID ""; print "Token and account ID deleted."; }
+      dc up -d --force-recreate litellm >/dev/null && wait_up && print "Cloudflare models off. Lumo only." ;;
+    status|"")
+      print "models     : $(grep -c 'model_name: cf-' $LITELLM_CFG) cf-* in LiteLLM"
+      print "account    : ${CF_ACCOUNT_ID:-none}"
+      if [[ -n $(secret_get litellm cloudflare-api-key) ]]; then
+        print -n "token      : in $SECRETS/litellm, "; cf_verify && print valid || print REJECTED
+      else print "token      : none"; fi ;;
+    *) die "usage: lumo cloudflare on [--new-token] | off [--forget] | status" ;;
+  esac
+}
+
+cmd_doctor() {
+  local bad=0
+  chk() { if eval "$2" >/dev/null 2>&1; then print "  ok   $1"; else print "  FAIL $1${3:+  ->  $3}"; bad=1; fi; }
+  local where=Linux; is_wsl && where="Linux / WSL2"
+  print "Lumo Stack doctor ($where)"
+  chk "docker running"             "docker info"                         "start Docker"
+  chk "docker compose v2"          "docker compose version"              "install the compose plugin"
+  chk "installed ($LUMO_CONF)"     "[[ -r $LITELLM_CFG && -r $TAMER_CFG ]]" "$LUMO_LINUX/install"
+  chk "secrets folder user-only"   "[[ \$(stat -c %a $SECRETS) == 700 ]]"  "chmod 700 $SECRETS"
+  chk "vault key present, 0600"    "[[ \$(stat -c %a $SECRETS/tamer/lumo-vault-key) == 600 ]]" "re-run install"
+  chk "routes: Lumo${CF_ACCOUNT_ID:+ + Cloudflare} only" "! bases | grep -qvxF -e 'api_base: http://bridge:3004/v1' -e 'api_base: $CF_BASE'" "check $LITELLM_CFG"
+  chk "lumo-bridge on 127.0.0.1:$TAMER_PORT" "curl -s -m 3 http://127.0.0.1:$TAMER_PORT/health" "lumo up"
+  chk "LiteLLM on 127.0.0.1:$LITELLM_PORT"   "curl -s -m 3 http://127.0.0.1:$LITELLM_PORT/health/liveliness" "lumo up"
+  chk "ports bound to 127.0.0.1 only" "! dc ps --format '{{.Ports}}' | grep -qE '0\.0\.0\.0:|:::'" "check compose.yaml"
+  chk "jail network is internal"  "[[ \$(docker network inspect -f '{{.Internal}}' $LUMO_JAIL_NET) == true ]]" "lumo up"
+  chk "Proton sign-in valid"      "auth_status | grep -q 'configured and valid'" "lumo login"
+  chk "Lumo answers"              "curl -s -m 60 http://127.0.0.1:$LITELLM_PORT/v1/chat/completions -H 'Authorization: Bearer $(litellm_key)' -H 'Content-Type: application/json' -d '{\"model\":\"lumo-lite\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with: ok\"}],\"max_tokens\":5}' | grep -q choices" "lumo login"
+  [[ -n $CF_ACCOUNT_ID ]] && chk "Cloudflare token valid" "cf_verify" "lumo cloudflare on --new-token"
+  return $bad
+}
+
+cmd_update() {
+  need_install
+  local old=$(mktemp); cp $LUMO_STACK/versions.env $old
+  if [[ -d $LUMO_STACK/.git ]]; then
+    run git -C $LUMO_STACK pull --ff-only || die "couldn't update the stack (local changes?)"
+    source $LUMO_STACK/versions.env
+    export TAMER_COMMIT LITELLM_VERSION WEBUI_IMAGE SOCAT_IMAGE
+  fi
+  log "update: tamer=$TAMER_COMMIT litellm=$LITELLM_VERSION"
+  run tamer_src && run dc build tamer litellm && run dc pull bridge relay && run dc --profile web pull webui \
+    && run docker build -q -t lumo-opencode:$OPENCODE_VERSION -f $LUMO_STACK/Dockerfile.opencode $LUMO_STACK >/dev/null \
+    || die "build failed; nothing changed"
+  run dc up -d bridge tamer litellm relay
+  if wait_up; then print "Updated: lumo-bridge $TAMER_COMMIT, LiteLLM $LITELLM_VERSION."; rm -f $old; return; fi
+  # Roll back: the previous images are still tagged by version, so start those again.
+  log "update: failed, rolling back"
+  source $old; export TAMER_COMMIT LITELLM_VERSION WEBUI_IMAGE SOCAT_IMAGE
+  dc up -d bridge tamer litellm relay; wait_up
+  die "the new versions didn't start; rolled back to lumo-bridge $TAMER_COMMIT, LiteLLM $LITELLM_VERSION (old versions.env: $old)"
+}
+
+cmd_uninstall() {
+  print "Removing Lumo Stack containers${1:+, configs, sign-in and chats}."
+  run dc --profile web --profile browser down ${1:+--volumes}
+  docker rm -f ${LUMO_PROJECT}-code-web >/dev/null 2>&1
+  run docker network rm ${LUMO_PROJECT}-web-only 2>/dev/null
+  [[ -L $BIN_DIR/lumo && $(readlink $BIN_DIR/lumo) == $LUMO_LINUX/lumo ]] && run rm -f $BIN_DIR/lumo
+  [[ -L $BIN_DIR/claude-lumo && $(readlink $BIN_DIR/claude-lumo) == $LUMO_LINUX/claude-lumo ]] && run rm -f $BIN_DIR/claude-lumo
+  if [[ $1 == --purge ]]; then
+    run rm -rf $LUMO_CONF $LUMO_DATA
+    print "Configs, secrets and the Proton login are deleted. Your workspace ($LUMO_HOME) is kept."
+  else
+    print "Kept: $LUMO_CONF (configs, secrets), $LUMO_DATA (login), $LUMO_HOME (workspace). --purge removes the first two."
+  fi
+}
+
+case $1 in
+  up)         cmd_up ;;
+  down)       need_install; run dc --profile web --profile browser stop ;;
+  restart)    need_install; run dc restart; wait_up ;;
+  status)     need_install; dc --profile web ps; print; auth_status | grep -iE 'valid|expire|not' | head -3 ;;
+  logs)       shift; dc logs --tail ${LUMO_LOG_LINES:-100} "$@" ;;
+  login)      shift; cmd_login "$@" ;;
+  code)       shift; cmd_code "$@" ;;
+  code-web)   [[ $2 == stop ]] && { run docker rm -f ${LUMO_PROJECT}-code-web >/dev/null; print "stopped"; } || cmd_code --web ;;
+  web)        shift; cmd_web "$@" ;;
+  claude)     shift; exec $LUMO_LINUX/claude-lumo "$@" ;;
+  cloudflare) shift; cmd_cloudflare "$@" ;;
+  doctor)     cmd_doctor ;;
+  update)     cmd_update ;;
+  uninstall)  shift; cmd_uninstall "$@" ;;
+  ""|-h|--help|help) sed -n '2,/^emulate/p' $0 | sed '$d; s/^# \{0,1\}//' ;;
+  *) die "unknown command '$1' (lumo help)" ;;
+esac

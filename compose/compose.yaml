@@ -1,0 +1,128 @@
+# Lumo Stack services for Linux, WSL2 and native Windows (macOS uses LaunchAgents instead).
+# Driven by linux/lumo and windows/lumo.ps1, which set the variables below:
+#   LUMO_CONF  config dir (configs + secrets, user-only)   LUMO_DATA  data dir (bridge sessions)
+#   TAMER_SRC  lumo-bridge checkout at TAMER_COMMIT (the CLI keeps it in LUMO_DATA/src)
+#   LUMO_UID / LUMO_GID  run as you, so the user-only files are readable without extra privileges
+# Versions come from ../versions.env. Every port is published on 127.0.0.1 only.
+name: ${LUMO_PROJECT:-lumo}
+
+x-hardened: &hardened
+  restart: unless-stopped
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+
+services:
+  # lumo-bridge listens on 127.0.0.1 inside its container (hard-coded, and we keep it that way).
+  # This tiny relay owns the network namespace; the bridge joins it and the relay forwards
+  # the namespace's port 3004 to the bridge's 127.0.0.1:3003. LiteLLM reaches it as bridge:3004.
+  bridge:
+    <<: *hardened
+    image: ${SOCAT_IMAGE}
+    read_only: true
+    command: TCP-LISTEN:3004,fork,reuseaddr TCP:127.0.0.1:3003
+    ports: ["127.0.0.1:${TAMER_PORT:-3003}:3004"]
+    networks: [stack]
+
+  tamer:
+    <<: *hardened
+    build:
+      context: ${TAMER_SRC}
+    image: lumo-bridge:${TAMER_COMMIT}
+    command: ["server"]
+    user: "${LUMO_UID:-1000}:${LUMO_GID:-1000}"
+    network_mode: service:bridge
+    depends_on: [bridge]
+    environment: [NODE_ENV=production]
+    volumes:
+      - ${LUMO_CONF}/tamer-config.yaml:/app/config.yaml:ro
+      - ${LUMO_DATA}/sessions:/app/sessions
+      - ${LUMO_CONF}/secrets/tamer:/run/secrets:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3003/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+
+  litellm:
+    <<: *hardened
+    build:
+      context: .
+      dockerfile: Dockerfile.litellm
+      args:
+        LITELLM_VERSION: ${LITELLM_VERSION}
+    image: lumo-litellm:${LITELLM_VERSION}
+    user: "${LUMO_UID:-1000}:${LUMO_GID:-1000}"
+    environment:
+      CF_ACCOUNT_ID: ${CF_ACCOUNT_ID:-}
+      HOME: /tmp
+    volumes:
+      - ${LUMO_CONF}/litellm-config.yaml:/app/config.yaml:ro
+      - ${LUMO_CONF}/secrets/litellm:/run/secrets:ro
+    ports: ["127.0.0.1:${LITELLM_PORT:-4000}:4000"]
+    networks: [stack]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+
+  # The jail's only way out: the jail network is internal (no internet); this relay sits on
+  # both networks and forwards one port to LiteLLM. OpenCode reaches it as lumo-relay:4000.
+  relay:
+    <<: *hardened
+    image: ${SOCAT_IMAGE}
+    read_only: true
+    mem_limit: 64m
+    command: TCP-LISTEN:4000,fork,reuseaddr TCP:litellm:4000
+    networks:
+      stack: {}
+      jail: {aliases: [lumo-relay]}
+
+  # Open WebUI (chat in the browser), started by `lumo web`.
+  webui:
+    image: ${WEBUI_IMAGE}
+    profiles: [web]
+    restart: unless-stopped
+    env_file: ${LUMO_CONF}/webui.env
+    environment:
+      - OPENAI_API_BASE_URL=http://litellm:4000/v1
+      - ENABLE_OLLAMA_API=False
+      - ENABLE_TITLE_GENERATION=False
+      - ENABLE_TAGS_GENERATION=False
+      - ENABLE_FOLLOW_UP_GENERATION=False
+      - ENABLE_AUTOCOMPLETE_GENERATION=False
+      - ENABLE_EVALUATION_ARENA_MODELS=False
+      - ANONYMIZED_TELEMETRY=False
+      - SCARF_NO_ANALYTICS=true
+      - DO_NOT_TRACK=true
+    volumes: [webui-data:/app/backend/data]
+    ports: ["127.0.0.1:${WEBUI_PORT:-8080}:8080"]
+    networks: [stack]
+
+  # Browser for the Proton sign-in when Proton asks for a CAPTCHA (`lumo login --browser`).
+  # You use it through noVNC at http://127.0.0.1:3001; the bridge drives it as browser:9222.
+  browser:
+    build:
+      context: ${TAMER_SRC}
+      dockerfile: Dockerfile.browser
+    image: lumo-bridge-browser:${TAMER_COMMIT}
+    profiles: [browser]
+    environment:
+      - PUID=${LUMO_UID:-1000}
+      - PGID=${LUMO_GID:-1000}
+      - TZ=Etc/UTC
+      - CHROME_CLI=https://lumo.proton.me --remote-debugging-address=0.0.0.0 --remote-debugging-port=9221 --remote-debugging-allowed-origins=* --disable-dev-shm-usage
+    volumes: [browser-data:/config]
+    ports: ["127.0.0.1:${BROWSER_PORT:-3001}:3001"]
+    shm_size: 2gb
+    networks: [stack]
+
+networks:
+  stack: {}
+  jail:
+    name: ${LUMO_JAIL_NET:-lumo-jail}
+    internal: true
+
+volumes:
+  webui-data:
+  browser-data:

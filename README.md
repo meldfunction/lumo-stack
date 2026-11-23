@@ -13,7 +13,9 @@ account, nothing phoning home.
 > could put your Proton account at risk. Not affiliated with or endorsed by Proton.
 > Rebellious, yes. Reckless, no.
 
-**Platforms:** macOS today. Windows and Linux land in v0.2 (Docker Compose, same stack everywhere).
+**Platforms:** macOS (the original, most locked-down setup). **New in v0.2:** Linux and WSL2, and
+native Windows, both on Docker Compose. Linux is built but not yet tested end to end; Windows is
+**experimental and untested** (we have no Windows machine). See [Linux and Windows](#linux-and-windows).
 
 ## Security: what we lock down, and what we open up
 
@@ -45,6 +47,20 @@ turning on:
 | Sandbox | Some tools need it off | `LUMO_NO_SANDBOX=1` (not recommended) |
 
 Pushing, PRs and anything public still go through `claude-lumo`'s permission prompts.
+
+### Linux and Windows
+
+The tables above are for macOS. Linux, WSL2 and native Windows run the same pieces in Docker
+Compose instead of LaunchAgents, with these differences:
+
+| Where | Linux / WSL2 | Native Windows |
+|---|---|---|
+| Secrets | Files only your user can read (`~/.config/lumo-stack`, `chmod 600`), each mounted only into the container that needs it. **Weaker than the macOS Keychain**: any program running as you can read them | The same, in `%APPDATA%\lumo-stack`, locked to your user with Windows permissions. Same caveat |
+| The bridge | Its port is published on `127.0.0.1` only. Containers on the stack's own network can reach it | Same |
+| Containers | Run as your user, with every Linux capability dropped and no privilege escalation | Same (Docker Desktop) |
+| `claude-lumo`'s commands | Claude Code's sandbox works here (bubblewrap + socat) | **No sandbox exists on native Windows**, so `claude-lumo` refuses to start unless you set `LUMO_NO_SANDBOX=1`. For the sandbox, install inside WSL2 |
+| The jailed agent | Same jail as macOS | Same jail as macOS |
+| Tinfoil, local Ollama, Lumo Home, hourly login check | Not yet (macOS only) | Not yet (macOS only) |
 
 ---
 
@@ -226,6 +242,34 @@ run. Re-running is safe: your keys, settings and login stay put.
 **Changed your mind?** `./uninstall` removes it all and keeps your files;
 `./uninstall --purge` takes those too.
 
+### Linux (and WSL2)
+
+Needs Docker Engine with the Compose plugin (or Docker Desktop), zsh, git, curl, openssl and
+python3. For `claude-lumo`: Claude Code, plus `bubblewrap` and `socat` for its sandbox.
+
+```sh
+sudo apt install zsh git curl openssl python3 docker.io docker-compose-v2   # Debian/Ubuntu
+git clone https://github.com/meldfunction/lumo-stack.git ~/lumo-stack
+cd ~/lumo-stack && ./linux/install            # --dry-run, --with-claude, --no-login, --yes
+```
+
+One command does everything: `lumo up`, `lumo login`, `lumo code`, `lumo web`, `lumo doctor`,
+`lumo update`, `lumo uninstall [--purge]` (`lumo help` lists them all). Configs and secrets live in
+`~/.config/lumo-stack`, the Proton login in `~/.local/share/lumo-stack`.
+
+### Windows (experimental, untested)
+
+Needs Docker Desktop (Linux containers), Git and PowerShell 7: `winget install Docker.DockerDesktop Git.Git Microsoft.PowerShell`.
+
+```powershell
+git clone https://github.com/meldfunction/lumo-stack.git $HOME\lumo-stack
+pwsh -File $HOME\lumo-stack\windows\install.ps1      # -DryRun, -NoLogin, -Yes
+```
+
+The same `lumo` commands, as PowerShell (`lumo code -Project app`, `lumo login -Browser`).
+Want `claude-lumo` with its sandbox? Use WSL2 and the Linux steps above. If you try Windows,
+please open an issue either way.
+
 ## Under the hood
 
 ```
@@ -236,7 +280,8 @@ lumo home ────────────► Lumo Home :8090 (status, sign-
 ```
 
 LiteLLM routes only to lumo-tamer, and every launcher checks that before it
-starts. lumo-tamer and LiteLLM run as LaunchAgents; an hourly check pings you if
+starts. On macOS, lumo-tamer and LiteLLM run as LaunchAgents (on Linux and Windows,
+as Compose services: see `compose/compose.yaml`); an hourly check pings you if
 the Proton login stops working. Everything listens on `127.0.0.1`.
 
 ### Settings

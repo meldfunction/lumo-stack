@@ -1,0 +1,15 @@
+# lumo-bridge config for the Compose stack (Linux / Windows). Rendered by the installer.
+server:
+  port: 3003
+  apiKey: "{{TAMER_KEY}}"
+  customTools:
+    enabled: true
+auth:
+  vault:
+    keyFilePath: "/run/secrets/lumo-vault-key"
+  browser:
+    cdpEndpoint: "http://browser:9222"
+cli:
+  log:
+    target: "file"
+    filePath: "sessions/lumo-tamer-cli.log"
