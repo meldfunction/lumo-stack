@@ -142,13 +142,13 @@
 <header class="hero">
   <div class="wrap hero-grid">
     <div>
-      <span class="stamp">Unofficial · v0.1</span>
+      <span class="stamp">Unofficial · v0.2</span>
       <h1>Lumo Stack</h1>
       <p class="lead">Your prompts are nobody's training data. Lumo Stack puts Proton's private AI inside <mark>Claude Code</mark>, a <mark>locked-down coding agent</mark> and <mark>your browser</mark>. It all runs on your own machine. No Anthropic account, no OpenAI account, nothing phoning home.</p>
       <div class="chips">
-        <span class="chip">macOS · now</span>
-        <span class="chip soon">Windows · v0.2</span>
-        <span class="chip soon">Linux · v0.2</span>
+        <span class="chip">macOS</span>
+        <span class="chip">Linux · new</span>
+        <span class="chip soon">Windows · experimental</span>
       </div>
       <div class="cta">
         <a class="btn primary" href="#install">Install it</a>
@@ -388,8 +388,8 @@
 
       <div class="tabs" role="tablist" aria-label="Platform">
         <button class="tab" role="tab" id="t-mac" aria-selected="true" aria-controls="p-mac">macOS</button>
-        <button class="tab" role="tab" id="t-win" aria-selected="false" aria-controls="p-soon">Windows<span class="s">v0.2</span></button>
-        <button class="tab" role="tab" id="t-lin" aria-selected="false" aria-controls="p-soon">Linux<span class="s">v0.2</span></button>
+        <button class="tab" role="tab" id="t-lin" aria-selected="false" aria-controls="p-lin">Linux / WSL2<span class="s">new</span></button>
+        <button class="tab" role="tab" id="t-win" aria-selected="false" aria-controls="p-win">Windows<span class="s">experimental</span></button>
       </div>
 
       <div class="panel" id="p-mac" role="tabpanel" aria-labelledby="t-mac">
@@ -427,16 +427,64 @@ cd ~/lumo-stack && ./install</pre><button class="copy" type="button">Copy</butto
         <p class="note">The first install pulls a few GB (Open WebUI, LiteLLM, OpenCode) and takes 10–20 minutes. Make a coffee. It finishes with the Proton sign-in and a <code>lumo doctor</code> run. Re-running is safe; your keys, settings and login stay put. Changed your mind? <code>./uninstall</code> removes it all and keeps your files; add <code>--purge</code> to take those too.</p>
       </div>
 
-      <div class="panel" id="p-soon" role="tabpanel" hidden>
-        <div class="soonbox">
-          <h3>Windows and Linux land in v0.2</h3>
-          <p>v0.2 moves the whole stack into Docker Compose, so it runs the same everywhere with just Docker and a browser.</p>
-          <ul>
-            <li>Sign in to Proton through a browser container, from any browser</li>
-            <li>A setup wizard inside Lumo Home, the same on every platform</li>
-            <li>Terminal installers per platform: <code>install.sh</code> and <code>install.ps1</code></li>
-            <li>Same jail, same localhost-only ports, same <code>lumo doctor</code></li>
-          </ul>
+      <div class="panel" id="p-lin" role="tabpanel" aria-labelledby="t-lin" hidden>
+        <div>
+          <h3>You'll need</h3>
+          <div class="req">
+            <span>A Proton account (Plus recommended)</span><span>Linux, or Windows with WSL2</span><span>Docker Engine + Compose plugin (or Docker Desktop)</span><span>zsh, git, curl, openssl, python3</span><span>Optional: Claude Code + bubblewrap + socat</span>
+          </div>
+          <div class="code"><pre>sudo apt install zsh git curl openssl python3 docker.io docker-compose-v2</pre><button class="copy" type="button">Copy</button></div>
+        </div>
+        <div class="split" style="margin-top:0">
+          <div>
+            <h3>Install</h3>
+            <ol class="steps">
+              <li>Clone and install:
+                <div class="code"><pre>git clone https://github.com/meldfunction/lumo-stack.git ~/lumo-stack
+cd ~/lumo-stack && ./linux/install</pre><button class="copy" type="button">Copy</button></div></li>
+              <li>Preview first if you like: <code>./linux/install --dry-run</code>. Options: <code>--with-claude</code>, <code>--no-login</code>, <code>--yes</code>.</li>
+              <li>Sign in to Proton in the terminal when it asks (email, password, authenticator code).</li>
+            </ol>
+          </div>
+          <div>
+            <h3>Then</h3>
+            <ol class="steps">
+              <li><code>lumo code</code>: the jailed coding agent</li>
+              <li><code>lumo web</code>: chat in your browser</li>
+              <li><code>lumo doctor</code>, <code>lumo update</code>, <code>lumo help</code></li>
+            </ol>
+          </div>
+        </div>
+        <p class="note">New in v0.2 and not yet tested end to end. Everything runs in Docker Compose on 127.0.0.1. Secrets are files only your user can read: weaker than the macOS Keychain. Changed your mind? <code>lumo uninstall</code>, add <code>--purge</code> to delete configs and the login too.</p>
+      </div>
+
+      <div class="panel" id="p-win" role="tabpanel" aria-labelledby="t-win" hidden>
+        <div>
+          <h3>You'll need</h3>
+          <div class="req">
+            <span>A Proton account (Plus recommended)</span><span>Windows 10/11</span><span>Docker Desktop (Linux containers)</span><span>Git</span><span>PowerShell 7</span>
+          </div>
+          <div class="code"><pre>winget install Docker.DockerDesktop Git.Git Microsoft.PowerShell</pre><button class="copy" type="button">Copy</button></div>
+        </div>
+        <div class="split" style="margin-top:0">
+          <div>
+            <h3>Install (in PowerShell 7)</h3>
+            <ol class="steps">
+              <li>Clone and install:
+                <div class="code"><pre>git clone https://github.com/meldfunction/lumo-stack.git $HOME\lumo-stack
+pwsh -File $HOME\lumo-stack\windows\install.ps1</pre><button class="copy" type="button">Copy</button></div></li>
+              <li>Preview first if you like: add <code>-DryRun</code>. Options: <code>-NoLogin</code>, <code>-Yes</code>.</li>
+              <li>Open a new terminal, then <code>lumo code</code>, <code>lumo web</code>, <code>lumo doctor</code>.</li>
+            </ol>
+          </div>
+          <div>
+            <h3>Good to know</h3>
+            <ol class="steps">
+              <li>Experimental: not yet tested on a real Windows machine. Please tell us how it goes.</li>
+              <li>Claude Code has no sandbox on native Windows, so <code>claude-lumo</code> stays off. For it, use WSL2 and the Linux steps.</li>
+              <li>Secrets are files locked to your user: weaker than the macOS Keychain.</li>
+            </ol>
+          </div>
         </div>
       </div>
     </div>
@@ -456,16 +504,16 @@ cd ~/lumo-stack && ./install</pre><button class="copy" type="button">Copy</butto
 </main>
 
 <footer>
-  <div class="wrap">Lumo Stack v0.1.0 · <a href="https://github.com/meldfunction/lumo-stack" target="_blank" rel="noopener">Source on GitHub</a>. Built on <a href="https://github.com/meldfunction/lumo-bridge" target="_blank" rel="noopener">lumo-bridge</a> (a fork of <a href="https://github.com/ZeroTricks/lumo-tamer" target="_blank" rel="noopener">lumo-tamer</a>), LiteLLM, OpenCode and Open WebUI. Not affiliated with Proton AG. Made by people who read privacy policies for fun.</div>
+  <div class="wrap">Lumo Stack v0.2.0 · <a href="https://github.com/meldfunction/lumo-stack" target="_blank" rel="noopener">Source on GitHub</a>. Built on <a href="https://github.com/meldfunction/lumo-bridge" target="_blank" rel="noopener">lumo-bridge</a> (a fork of <a href="https://github.com/ZeroTricks/lumo-tamer" target="_blank" rel="noopener">lumo-tamer</a>), LiteLLM, OpenCode and Open WebUI. Not affiliated with Proton AG. Made by people who read privacy policies for fun.</div>
 </footer>
 
 <script>
 (function () {
-  var tabs = document.querySelectorAll('.tab'), mac = document.getElementById('p-mac'), soon = document.getElementById('p-soon');
+  var tabs = document.querySelectorAll('.tab');
   tabs.forEach(function (t) {
     t.addEventListener('click', function () {
       tabs.forEach(function (x) { x.setAttribute('aria-selected', String(x === t)); });
-      var isMac = t.id === 't-mac'; mac.hidden = !isMac; soon.hidden = isMac;
+      tabs.forEach(function (x) { document.getElementById(x.getAttribute('aria-controls')).hidden = x !== t; });
     });
   });
   document.querySelectorAll('.copy').forEach(function (b) {

@@ -20,7 +20,8 @@ native Windows, both on Docker Compose. Linux is built but not yet tested end to
 ## Security: what we lock down, and what we open up
 
 Proton protects your chats once they reach Lumo. Lumo Stack can't make Lumo itself any more private
-than that: every prompt still goes to Proton. What it controls is everything around Lumo on your Mac.
+than that: every prompt still goes to Proton. What it controls is everything around Lumo on your machine.
+The tables below describe macOS; [Linux and Windows](#linux-and-windows) differ in a few places.
 
 **Locked down**
 
@@ -141,11 +142,19 @@ does it for you if it's missing. No Anthropic account is needed for `claude-lumo
 Heads up: Claude Code was built around Claude's tool use. With Lumo it's great
 for questions and small edits, and wobblier on long multi-step jobs. For anything
 that edits files, the jailed `lumo` agent is the safer bet: `claude-lumo` runs on
-your Mac in Claude Code's sandbox with normal permission prompts, not in a jail.
+your machine in Claude Code's sandbox with normal permission prompts, not in a jail. On native
+Windows there is no sandbox, so `claude-lumo` stays off there unless you switch it on (use WSL2 instead).
 
 ## Commands
 
 It's all just `lumo`. Every command starts whatever's asleep first, and keeps a log.
+
+> **On Linux or Windows?** The table below is macOS. There it's one command with subcommands:
+> `lumo code` (the jailed agent; `lumo code run "task"` for a one-shot), `lumo code --web`, `lumo web`,
+> `lumo login`, `lumo cloudflare on|off|status`, `lumo status`, `lumo doctor`, `lumo update`,
+> `lumo uninstall`. `lumo help` lists them. On Windows the options are PowerShell-style
+> (`lumo code -Project app -Max`). Not there yet: `lumo ask`, snapshots, `lumo-ask`, `lumo-task`/`lumo-hq`,
+> Lumo Home, Tinfoil and local Ollama.
 
 | Command | What it does |
 |---|---|
@@ -205,7 +214,9 @@ New to Lumo? [Try it](https://lumo.proton.me) ·
 [Getting started](https://proton.me/support/lumo-getting-started) ·
 [What's new in Lumo 2.0](https://proton.me/blog/lumo-2)
 
-### Then, your Mac
+Then pick your system: [macOS](#macos-what-you-need) · [Linux / WSL2](#linux-and-wsl2) · [Windows](#windows-experimental-untested).
+
+### macOS: what you need
 
 - [OrbStack](https://orbstack.dev) (recommended) or Docker Desktop
 - Node.js 20+, Python 3.10+ and git
@@ -217,7 +228,7 @@ brew install git node python
 brew install --cask orbstack
 ```
 
-### Click your way through
+### macOS: click your way through
 
 1. [Download the zip](https://github.com/meldfunction/lumo-stack/archive/refs/heads/main.zip) and unzip it.
 2. Double-click **Install Lumo.command**. First time, macOS gets suspicious: right-click it and choose Open.
@@ -225,7 +236,7 @@ brew install --cask orbstack
 4. Sign in to Proton in the browser window that pops up. It closes itself when you're done.
 5. Lumo Home opens. You're in.
 
-### Or the terminal way
+### macOS: the terminal way
 
 ```sh
 git clone https://github.com/meldfunction/lumo-stack.git ~/lumo-stack
@@ -266,7 +277,10 @@ git clone https://github.com/meldfunction/lumo-stack.git $HOME\lumo-stack
 pwsh -File $HOME\lumo-stack\windows\install.ps1      # -DryRun, -NoLogin, -Yes
 ```
 
-The same `lumo` commands, as PowerShell (`lumo code -Project app`, `lumo login -Browser`).
+Open a new terminal afterwards so `lumo` is on your PATH. The same `lumo` commands, as PowerShell
+(`lumo code -Project app`, `lumo login -Browser`). Configs and secrets live in `%APPDATA%\lumo-stack`,
+the Proton login in `%LOCALAPPDATA%\lumo-stack`. **Changed your mind?** `lumo uninstall` (add
+`-Purge` to delete configs and the login too; your workspace stays).
 Want `claude-lumo` with its sandbox? Use WSL2 and the Linux steps above. If you try Windows,
 please open an issue either way.
 
@@ -293,6 +307,9 @@ to it (it's git-ignored):
 LUMO_HOME=$HOME/Documents/Lumo   # workspace (macOS will ask apps for access to Documents)
 ```
 
+On Linux the settings file is `~/.config/lumo-stack/lumo.env`; on Windows,
+`%APPDATA%\lumo-stack\lumo.env`. Ports can be changed there too (`TAMER_PORT`, `LITELLM_PORT`, `WEBUI_PORT`).
+
 Pinned versions live in `versions.env`; `lumo update` changes them.
 
 ## What to expect
@@ -300,7 +317,7 @@ Pinned versions live in `versions.env`; `lumo update` changes them.
 - **Tool calling is experimental.** Quick edits and file writes work; long multi-step sessions trip over themselves more than with Claude or GPT.
 - **Some Lumo perks stay home.** Lumo's web search, image generation and memory don't make it through the bridge.
 - **Your login babysits itself.** It lasts 24 hours and renews on its own; if Proton signs you out, Lumo Home and a notification tell you.
-- **macOS only in v0.1.** Windows and Linux are next.
+- **macOS is the most tested.** Linux and Windows are new in v0.2: Linux is built but not yet tested end to end, Windows is experimental and untested, and some extras (Lumo Home, sign-in alerts, Tinfoil, local Ollama) are macOS only for now.
 
 ---
 
