@@ -1,0 +1,8 @@
+# LiteLLM for the Lumo stack (Linux / Windows). Version pinned in versions.env.
+FROM python:3.12-slim
+ARG LITELLM_VERSION
+RUN pip install --no-cache-dir --disable-pip-version-check "litellm[proxy]==${LITELLM_VERSION}"
+COPY litellm-entrypoint.sh /usr/local/bin/litellm-entrypoint
+RUN chmod 755 /usr/local/bin/litellm-entrypoint
+WORKDIR /tmp
+ENTRYPOINT ["litellm-entrypoint"]
